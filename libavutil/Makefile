@@ -15,6 +15,7 @@ HEADERS = adler32.h                                                     \
           bprint.h                                                      \
           bswap.h                                                       \
           channel_layout.h                                              \
+          colorspace.h                                                  \
           common.h                                                      \
           cpu.h                                                         \
           crc.h                                                         \
