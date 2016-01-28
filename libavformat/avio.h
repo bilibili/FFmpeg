@@ -154,6 +154,9 @@ typedef struct AVIOContext {
      */
     int64_t (*read_seek)(void *opaque, int stream_index,
                          int64_t timestamp, int flags);
+
+    //add by feng for [download speed]
+    void ( *flush_speed)(void *ffp_opaque, int64_t bytes, int64_t elapsed_milli);
     /**
      * A combination of AVIO_SEEKABLE_ flags or 0 when the stream is not seekable.
      */
@@ -202,6 +205,9 @@ typedef struct AVIOContext {
      * This is current internal only, do not use from outside.
      */
     int short_seek_threshold;
+
+    //add by feng for [download speed]
+    void *ffp_opaque;
 } AVIOContext;
 
 /* unbuffered I/O */

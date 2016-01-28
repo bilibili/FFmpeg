@@ -1635,6 +1635,11 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     for (i = 0; i < c->n_playlists; i++) {
         struct playlist *pls = c->playlists[i];
+        //add by feng
+        if (pls->ctx) {
+            pls->ctx->pb->ffp_opaque = s->pb->ffp_opaque;
+            pls->ctx->pb->flush_speed = s->pb->flush_speed;
+        }
         /* Make sure we've got one buffered packet from each open playlist
          * stream */
         if (pls->needed && !pls->pkt.data) {
