@@ -25,6 +25,7 @@
 #include "libavutil/intreadwrite.h"
 #include "libavutil/log.h"
 #include "libavutil/opt.h"
+#include "libavutil/time.h"
 #include "libavutil/avassert.h"
 #include "avformat.h"
 #include "avio.h"
@@ -69,6 +70,10 @@ const AVClass ff_avio_class = {
 static void fill_buffer(AVIOContext *s);
 static int url_resetbuf(AVIOContext *s, int flags);
 
+//add by feng for [download speed]
+static int64_t recv_total_size = 0;
+static int64_t calc_start_time = 0;
+
 int ffio_init_context(AVIOContext *s,
                   unsigned char *buffer,
                   int buffer_size,
@@ -105,7 +110,10 @@ int ffio_init_context(AVIOContext *s,
     }
     s->read_pause = NULL;
     s->read_seek  = NULL;
-
+    
+    //add by feng for [download speed]
+    recv_total_size = 0;
+    calc_start_time = av_gettime();
     return 0;
 }
 
@@ -434,6 +442,21 @@ void avio_wb24(AVIOContext *s, unsigned int val)
     avio_w8(s, (uint8_t)val);
 }
 
+//add by feng for [download speed]
+static void update_recvbuffer(AVIOContext *s, int len)
+{
+    int64_t elapsed_micro = av_gettime() - calc_start_time;
+    recv_total_size += len;
+    if (elapsed_micro >= 1000000) {
+        // handle speed msg
+        if (s->flush_speed) {
+            s->flush_speed(s->ffp_opaque, recv_total_size, (int64_t)elapsed_micro/1000.0);
+        }
+        recv_total_size = 0;
+        calc_start_time = av_gettime();
+    }
+}
+
 /* Input stream */
 
 static void fill_buffer(AVIOContext *s)
@@ -443,14 +466,16 @@ static void fill_buffer(AVIOContext *s)
     uint8_t *dst        = s->buf_end - s->buffer + max_buffer_size < s->buffer_size ?
                           s->buf_end : s->buffer;
     int len             = s->buffer_size - (dst - s->buffer);
-
+    
     /* can't fill the buffer without read_packet, just set EOF if appropriate */
     if (!s->read_packet && s->buf_ptr >= s->buf_end)
         s->eof_reached = 1;
 
     /* no need to do anything if EOF already reached */
-    if (s->eof_reached)
+    if (s->eof_reached) {
+        update_recvbuffer(s, 0);
         return;
+    }
 
     if (s->update_checksum && dst == s->buffer) {
         if (s->buf_end > s->checksum_ptr)
@@ -458,7 +483,7 @@ static void fill_buffer(AVIOContext *s)
                                              s->buf_end - s->checksum_ptr);
         s->checksum_ptr = s->buffer;
     }
-
+    
     /* make buffer smaller in case it ended up large after probing */
     if (s->read_packet && s->orig_buffer_size && s->buffer_size > s->orig_buffer_size) {
         if (dst == s->buffer) {
@@ -471,7 +496,7 @@ static void fill_buffer(AVIOContext *s)
         av_assert0(len >= s->orig_buffer_size);
         len = s->orig_buffer_size;
     }
-
+    
     if (s->read_packet)
         len = s->read_packet(s->opaque, dst, len);
     else
@@ -488,6 +513,8 @@ static void fill_buffer(AVIOContext *s)
         s->buf_end = dst + len;
         s->bytes_read += len;
     }
+    
+    update_recvbuffer(s, len);
 }
 
 unsigned long ff_crc04C11DB7_update(unsigned long checksum, const uint8_t *buf,
@@ -534,7 +561,7 @@ int avio_r8(AVIOContext *s)
 int avio_read(AVIOContext *s, unsigned char *buf, int size)
 {
     int len, size1;
-
+    len = 0;
     size1 = size;
     while (size > 0) {
         len = s->buf_end - s->buf_ptr;
@@ -572,10 +599,12 @@ int avio_read(AVIOContext *s, unsigned char *buf, int size)
             size -= len;
         }
     }
+
     if (size1 == size) {
         if (s->error)      return s->error;
         if (avio_feof(s))  return AVERROR_EOF;
     }
+
     return size1 - size;
 }
 
