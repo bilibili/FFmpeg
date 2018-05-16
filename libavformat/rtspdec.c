@@ -498,7 +498,6 @@ int ff_rtsp_parse_streaming_commands(AVFormatContext *s)
     } else if (methodcode == TEARDOWN) {
         rt->state = RTSP_STATE_IDLE;
         ret       = rtsp_send_reply(s, RTSP_STATUS_OK, NULL , request.seq);
-        return 0;
     }
     return ret;
 }
@@ -698,7 +697,6 @@ static int rtsp_listen(AVFormatContext *s)
             return AVERROR_INVALIDDATA;
         }
     }
-    return 0;
 }
 
 static int rtsp_probe(AVProbeData *p)
@@ -775,17 +773,18 @@ redo:
         return -1;
     id  = buf[0];
     len = AV_RB16(buf + 1);
-    av_log(s, AV_LOG_TRACE, "id=%d len=%d\n", id, len);
+    av_log(s, AV_LOG_TRACE, "mitesh id=%d len=%d buf_size=%d\n", id, len, buf_size);
     if (len > buf_size || len < 8)
         goto redo;
     /* get the data */
     ret = ffurl_read_complete(rt->rtsp_hd, buf, len);
+    av_log(s, AV_LOG_TRACE, "mitesh1 id=%d len=%d ret=%d\n", id, len, ret);
     if (ret != len)
         return -1;
     if (rt->transport == RTSP_TRANSPORT_RDT &&
         ff_rdt_parse_header(buf, len, &id, NULL, NULL, NULL, NULL) < 0)
         return -1;
-
+av_log(s, AV_LOG_TRACE, "mitesh2 id=%d len=%d buf_size=%d\n", id, len, buf_size);
     /* find the matching stream */
     for (i = 0; i < rt->nb_rtsp_streams; i++) {
         rtsp_st = rt->rtsp_streams[i];
@@ -793,8 +792,11 @@ redo:
             id <= rtsp_st->interleaved_max)
             goto found;
     }
-    goto redo;
+    av_log(s, AV_LOG_TRACE, "mitesh3 id=%d len=%d buf_size=%d\n", id, len, buf_size);
+    return 0;    
+//goto redo;
 found:
+av_log(s, AV_LOG_TRACE, "mitesh4 id=%d len=%d buf_size=%d\n", id, len, buf_size);
     *prtsp_st = rtsp_st;
     return len;
 }
