@@ -948,16 +948,23 @@ static void planar_rgb##nbits##endian_name##_to_y(uint8_t *dst, const uint8_t *s
 {                                                                                                   \
     planar_rgb16_to_y(dst, src, w, nbits, endian, rgb2yuv);                                         \
 }                                                                                                   \
-static void planar_rgb##nbits##endian_name##_to_a(uint8_t *dst, const uint8_t *src[4],              \
-                                                  int w, int32_t *rgb2yuv)                          \
-{                                                                                                   \
-    planar_rgb16_to_a(dst, src, w, nbits, endian, rgb2yuv);                                         \
-}                                                                                                   \
 static void planar_rgb##nbits##endian_name##_to_uv(uint8_t *dstU, uint8_t *dstV,                    \
                                                    const uint8_t *src[4], int w, int32_t *rgb2yuv)  \
 {                                                                                                   \
     planar_rgb16_to_uv(dstU, dstV, src, w, nbits, endian, rgb2yuv);                                 \
 }                                                                                                   \
+
+#define rgb9plus_planar_transparency_funcs(nbits)                           \
+static void planar_rgb##nbits##le_to_a(uint8_t *dst, const uint8_t *src[4], \
+                                       int w, int32_t *rgb2yuv)             \
+{                                                                           \
+    planar_rgb16_to_a(dst, src, w, nbits, 0, rgb2yuv);                      \
+}                                                                           \
+static void planar_rgb##nbits##be_to_a(uint8_t *dst, const uint8_t *src[4], \
+                                       int w, int32_t *rgb2yuv)             \
+{                                                                           \
+    planar_rgb16_to_a(dst, src, w, nbits, 1, rgb2yuv);                      \
+}
 
 #define rgb9plus_planar_funcs(nbits)            \
     rgb9plus_planar_funcs_endian(nbits, le, 0)  \
@@ -968,6 +975,10 @@ rgb9plus_planar_funcs(10)
 rgb9plus_planar_funcs(12)
 rgb9plus_planar_funcs(14)
 rgb9plus_planar_funcs(16)
+
+rgb9plus_planar_transparency_funcs(10)
+rgb9plus_planar_transparency_funcs(12)
+rgb9plus_planar_transparency_funcs(16)
 
 av_cold void ff_sws_init_input_funcs(SwsContext *c)
 {
@@ -1038,60 +1049,60 @@ av_cold void ff_sws_init_input_funcs(SwsContext *c)
         c->readChrPlanar = planar_rgb_to_uv;
         break;
 #if HAVE_BIGENDIAN
-    case AV_PIX_FMT_YUV444P9LE:
-    case AV_PIX_FMT_YUV422P9LE:
     case AV_PIX_FMT_YUV420P9LE:
+    case AV_PIX_FMT_YUV422P9LE:
+    case AV_PIX_FMT_YUV444P9LE:
+    case AV_PIX_FMT_YUV420P10LE:
     case AV_PIX_FMT_YUV422P10LE:
     case AV_PIX_FMT_YUV440P10LE:
     case AV_PIX_FMT_YUV444P10LE:
-    case AV_PIX_FMT_YUV420P10LE:
+    case AV_PIX_FMT_YUV420P12LE:
     case AV_PIX_FMT_YUV422P12LE:
     case AV_PIX_FMT_YUV440P12LE:
     case AV_PIX_FMT_YUV444P12LE:
-    case AV_PIX_FMT_YUV420P12LE:
+    case AV_PIX_FMT_YUV420P14LE:
     case AV_PIX_FMT_YUV422P14LE:
     case AV_PIX_FMT_YUV444P14LE:
-    case AV_PIX_FMT_YUV420P14LE:
     case AV_PIX_FMT_YUV420P16LE:
     case AV_PIX_FMT_YUV422P16LE:
     case AV_PIX_FMT_YUV444P16LE:
 
-    case AV_PIX_FMT_YUVA444P9LE:
-    case AV_PIX_FMT_YUVA422P9LE:
     case AV_PIX_FMT_YUVA420P9LE:
-    case AV_PIX_FMT_YUVA444P10LE:
-    case AV_PIX_FMT_YUVA422P10LE:
+    case AV_PIX_FMT_YUVA422P9LE:
+    case AV_PIX_FMT_YUVA444P9LE:
     case AV_PIX_FMT_YUVA420P10LE:
+    case AV_PIX_FMT_YUVA422P10LE:
+    case AV_PIX_FMT_YUVA444P10LE:
     case AV_PIX_FMT_YUVA420P16LE:
     case AV_PIX_FMT_YUVA422P16LE:
     case AV_PIX_FMT_YUVA444P16LE:
         c->chrToYV12 = bswap16UV_c;
         break;
 #else
-    case AV_PIX_FMT_YUV444P9BE:
-    case AV_PIX_FMT_YUV422P9BE:
     case AV_PIX_FMT_YUV420P9BE:
+    case AV_PIX_FMT_YUV422P9BE:
+    case AV_PIX_FMT_YUV444P9BE:
+    case AV_PIX_FMT_YUV420P10BE:
+    case AV_PIX_FMT_YUV422P10BE:
     case AV_PIX_FMT_YUV440P10BE:
     case AV_PIX_FMT_YUV444P10BE:
-    case AV_PIX_FMT_YUV422P10BE:
-    case AV_PIX_FMT_YUV420P10BE:
+    case AV_PIX_FMT_YUV420P12BE:
+    case AV_PIX_FMT_YUV422P12BE:
     case AV_PIX_FMT_YUV440P12BE:
     case AV_PIX_FMT_YUV444P12BE:
-    case AV_PIX_FMT_YUV422P12BE:
-    case AV_PIX_FMT_YUV420P12BE:
-    case AV_PIX_FMT_YUV444P14BE:
-    case AV_PIX_FMT_YUV422P14BE:
     case AV_PIX_FMT_YUV420P14BE:
+    case AV_PIX_FMT_YUV422P14BE:
+    case AV_PIX_FMT_YUV444P14BE:
     case AV_PIX_FMT_YUV420P16BE:
     case AV_PIX_FMT_YUV422P16BE:
     case AV_PIX_FMT_YUV444P16BE:
 
-    case AV_PIX_FMT_YUVA444P9BE:
-    case AV_PIX_FMT_YUVA422P9BE:
     case AV_PIX_FMT_YUVA420P9BE:
-    case AV_PIX_FMT_YUVA444P10BE:
-    case AV_PIX_FMT_YUVA422P10BE:
+    case AV_PIX_FMT_YUVA422P9BE:
+    case AV_PIX_FMT_YUVA444P9BE:
     case AV_PIX_FMT_YUVA420P10BE:
+    case AV_PIX_FMT_YUVA422P10BE:
+    case AV_PIX_FMT_YUVA444P10BE:
     case AV_PIX_FMT_YUVA420P16BE:
     case AV_PIX_FMT_YUVA422P16BE:
     case AV_PIX_FMT_YUVA444P16BE:
@@ -1333,24 +1344,25 @@ av_cold void ff_sws_init_input_funcs(SwsContext *c)
         c->readLumPlanar = planar_rgb_to_y;
         break;
 #if HAVE_BIGENDIAN
-    case AV_PIX_FMT_YUV444P9LE:
-    case AV_PIX_FMT_YUV422P9LE:
     case AV_PIX_FMT_YUV420P9LE:
-    case AV_PIX_FMT_YUV444P10LE:
-    case AV_PIX_FMT_YUV440P10LE:
-    case AV_PIX_FMT_YUV422P10LE:
+    case AV_PIX_FMT_YUV422P9LE:
+    case AV_PIX_FMT_YUV444P9LE:
     case AV_PIX_FMT_YUV420P10LE:
-    case AV_PIX_FMT_YUV444P12LE:
-    case AV_PIX_FMT_YUV440P12LE:
-    case AV_PIX_FMT_YUV422P12LE:
+    case AV_PIX_FMT_YUV422P10LE:
+    case AV_PIX_FMT_YUV440P10LE:
+    case AV_PIX_FMT_YUV444P10LE:
     case AV_PIX_FMT_YUV420P12LE:
-    case AV_PIX_FMT_YUV444P14LE:
-    case AV_PIX_FMT_YUV422P14LE:
+    case AV_PIX_FMT_YUV422P12LE:
+    case AV_PIX_FMT_YUV440P12LE:
+    case AV_PIX_FMT_YUV444P12LE:
     case AV_PIX_FMT_YUV420P14LE:
+    case AV_PIX_FMT_YUV422P14LE:
+    case AV_PIX_FMT_YUV444P14LE:
     case AV_PIX_FMT_YUV420P16LE:
     case AV_PIX_FMT_YUV422P16LE:
     case AV_PIX_FMT_YUV444P16LE:
 
+    case AV_PIX_FMT_GRAY9LE:
     case AV_PIX_FMT_GRAY10LE:
     case AV_PIX_FMT_GRAY12LE:
     case AV_PIX_FMT_GRAY16LE:
@@ -1358,12 +1370,12 @@ av_cold void ff_sws_init_input_funcs(SwsContext *c)
     case AV_PIX_FMT_P016LE:
         c->lumToYV12 = bswap16Y_c;
         break;
-    case AV_PIX_FMT_YUVA444P9LE:
-    case AV_PIX_FMT_YUVA422P9LE:
     case AV_PIX_FMT_YUVA420P9LE:
-    case AV_PIX_FMT_YUVA444P10LE:
-    case AV_PIX_FMT_YUVA422P10LE:
+    case AV_PIX_FMT_YUVA422P9LE:
+    case AV_PIX_FMT_YUVA444P9LE:
     case AV_PIX_FMT_YUVA420P10LE:
+    case AV_PIX_FMT_YUVA422P10LE:
+    case AV_PIX_FMT_YUVA444P10LE:
     case AV_PIX_FMT_YUVA420P16LE:
     case AV_PIX_FMT_YUVA422P16LE:
     case AV_PIX_FMT_YUVA444P16LE:
@@ -1371,24 +1383,25 @@ av_cold void ff_sws_init_input_funcs(SwsContext *c)
         c->alpToYV12 = bswap16Y_c;
         break;
 #else
-    case AV_PIX_FMT_YUV444P9BE:
-    case AV_PIX_FMT_YUV422P9BE:
     case AV_PIX_FMT_YUV420P9BE:
-    case AV_PIX_FMT_YUV444P10BE:
-    case AV_PIX_FMT_YUV440P10BE:
-    case AV_PIX_FMT_YUV422P10BE:
+    case AV_PIX_FMT_YUV422P9BE:
+    case AV_PIX_FMT_YUV444P9BE:
     case AV_PIX_FMT_YUV420P10BE:
-    case AV_PIX_FMT_YUV444P12BE:
-    case AV_PIX_FMT_YUV440P12BE:
-    case AV_PIX_FMT_YUV422P12BE:
+    case AV_PIX_FMT_YUV422P10BE:
+    case AV_PIX_FMT_YUV440P10BE:
+    case AV_PIX_FMT_YUV444P10BE:
     case AV_PIX_FMT_YUV420P12BE:
-    case AV_PIX_FMT_YUV444P14BE:
-    case AV_PIX_FMT_YUV422P14BE:
+    case AV_PIX_FMT_YUV422P12BE:
+    case AV_PIX_FMT_YUV440P12BE:
+    case AV_PIX_FMT_YUV444P12BE:
     case AV_PIX_FMT_YUV420P14BE:
+    case AV_PIX_FMT_YUV422P14BE:
+    case AV_PIX_FMT_YUV444P14BE:
     case AV_PIX_FMT_YUV420P16BE:
     case AV_PIX_FMT_YUV422P16BE:
     case AV_PIX_FMT_YUV444P16BE:
 
+    case AV_PIX_FMT_GRAY9BE:
     case AV_PIX_FMT_GRAY10BE:
     case AV_PIX_FMT_GRAY12BE:
     case AV_PIX_FMT_GRAY16BE:
@@ -1396,12 +1409,12 @@ av_cold void ff_sws_init_input_funcs(SwsContext *c)
     case AV_PIX_FMT_P016BE:
         c->lumToYV12 = bswap16Y_c;
         break;
-    case AV_PIX_FMT_YUVA444P9BE:
-    case AV_PIX_FMT_YUVA422P9BE:
     case AV_PIX_FMT_YUVA420P9BE:
-    case AV_PIX_FMT_YUVA444P10BE:
-    case AV_PIX_FMT_YUVA422P10BE:
+    case AV_PIX_FMT_YUVA422P9BE:
+    case AV_PIX_FMT_YUVA444P9BE:
     case AV_PIX_FMT_YUVA420P10BE:
+    case AV_PIX_FMT_YUVA422P10BE:
+    case AV_PIX_FMT_YUVA444P10BE:
     case AV_PIX_FMT_YUVA420P16BE:
     case AV_PIX_FMT_YUVA422P16BE:
     case AV_PIX_FMT_YUVA444P16BE:

@@ -55,8 +55,6 @@
 #include "thread.h"
 #include "vdpau_compat.h"
 
-static int h264_decode_end(AVCodecContext *avctx);
-
 const uint16_t ff_h264_mb_sizes[4] = { 256, 384, 512, 768 };
 
 int avpriv_h264_has_num_reorder_frames(AVCodecContext *avctx)
@@ -307,10 +305,10 @@ static int h264_init_context(AVCodecContext *avctx, H264Context *h)
     int i;
 
     h->avctx                 = avctx;
-    h->backup_width          = -1;
-    h->backup_height         = -1;
-    h->backup_pix_fmt        = AV_PIX_FMT_NONE;
     h->cur_chroma_format_idc = -1;
+
+    h->width_from_caller     = avctx->width;
+    h->height_from_caller    = avctx->height;
 
     h->picture_structure     = PICT_FRAME;
     h->workaround_bugs       = avctx->workaround_bugs;
@@ -391,7 +389,7 @@ static av_cold int h264_decode_end(AVCodecContext *avctx)
 
 static AVOnce h264_vlc_init = AV_ONCE_INIT;
 
-av_cold int ff_h264_decode_init(AVCodecContext *avctx)
+static av_cold int h264_decode_init(AVCodecContext *avctx)
 {
     H264Context *h = avctx->priv_data;
     int ret;
@@ -501,7 +499,6 @@ void ff_h264_flush_change(H264Context *h)
     ff_h264_unref_picture(h, &h->last_pic_for_ec);
 
     h->first_field = 0;
-    ff_h264_sei_uninit(&h->sei);
     h->recovery_frame = -1;
     h->frame_recovered = 0;
     h->current_slice = 0;
@@ -517,6 +514,7 @@ static void flush_dpb(AVCodecContext *avctx)
     memset(h->delayed_pic, 0, sizeof(h->delayed_pic));
 
     ff_h264_flush_change(h);
+    ff_h264_sei_uninit(&h->sei);
 
     for (i = 0; i < H264_MAX_PICTURE_COUNT; i++)
         ff_h264_unref_picture(h, &h->DPB[i]);
@@ -681,7 +679,7 @@ static int decode_nal_units(H264Context *h, const uint8_t *buf, int buf_size)
             }
 
             if (h->current_slice == 1) {
-                if (avctx->active_thread_type & FF_THREAD_FRAME && !h->avctx->hwaccel &&
+                if (avctx->active_thread_type & FF_THREAD_FRAME &&
                     i >= nals_needed && !h->setup_finished && h->cur_pic_ptr) {
                     ff_thread_finish_setup(avctx);
                     h->setup_finished = 1;
@@ -848,34 +846,20 @@ static int get_consumed_bytes(int pos, int buf_size)
 static int output_frame(H264Context *h, AVFrame *dst, H264Picture *srcp)
 {
     AVFrame *src = srcp->f;
-    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(src->format);
-    int i;
-    int ret = av_frame_ref(dst, src);
+    int ret;
+
+    if (src->format == AV_PIX_FMT_VIDEOTOOLBOX && src->buf[0]->size == 1)
+        return AVERROR_EXTERNAL;
+
+    ret = av_frame_ref(dst, src);
     if (ret < 0)
         return ret;
 
     av_dict_set(&dst->metadata, "stereo_mode", ff_h264_sei_stereo_mode(&h->sei.frame_packing), 0);
 
-    h->backup_width   = h->avctx->width;
-    h->backup_height  = h->avctx->height;
-    h->backup_pix_fmt = h->avctx->pix_fmt;
-
-    h->avctx->width   = dst->width;
-    h->avctx->height  = dst->height;
-    h->avctx->pix_fmt = dst->format;
-
     if (srcp->sei_recovery_frame_cnt == 0)
         dst->key_frame = 1;
-    if (!srcp->crop)
-        return 0;
 
-    for (i = 0; i < desc->nb_components; i++) {
-        int hshift = (i > 0) ? desc->log2_chroma_w : 0;
-        int vshift = (i > 0) ? desc->log2_chroma_h : 0;
-        int off    = ((srcp->crop_left >> hshift) << h->pixel_shift) +
-                      (srcp->crop_top  >> vshift) * dst->linesize[i];
-        dst->data[i] += off;
-    }
     return 0;
 }
 
@@ -998,19 +982,6 @@ static int h264_decode_frame(AVCodecContext *avctx, void *data,
     h->setup_finished = 0;
     h->nb_slice_ctx_queued = 0;
 
-    if (h->backup_width != -1) {
-        avctx->width    = h->backup_width;
-        h->backup_width = -1;
-    }
-    if (h->backup_height != -1) {
-        avctx->height    = h->backup_height;
-        h->backup_height = -1;
-    }
-    if (h->backup_pix_fmt != AV_PIX_FMT_NONE) {
-        avctx->pix_fmt    = h->backup_pix_fmt;
-        h->backup_pix_fmt = AV_PIX_FMT_NONE;
-    }
-
     ff_h264_unref_picture(h, &h->last_pic_for_ec);
 
     /* end of stream, output what is still in the buffers */
@@ -1072,8 +1043,8 @@ static int h264_decode_frame(AVCodecContext *avctx, void *data,
 #define OFFSET(x) offsetof(H264Context, x)
 #define VD AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
 static const AVOption h264_options[] = {
-    {"is_avc", "is avc", offsetof(H264Context, is_avc), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, 0},
-    {"nal_length_size", "nal_length_size", offsetof(H264Context, nal_length_size), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 4, 0},
+    { "is_avc", "is avc", OFFSET(is_avc), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, 0 },
+    { "nal_length_size", "nal_length_size", OFFSET(nal_length_size), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 4, 0 },
     { "enable_er", "Enable error resilience on damaged frames (unsafe)", OFFSET(enable_er), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, VD },
     { NULL },
 };
@@ -1091,13 +1062,13 @@ AVCodec ff_h264_decoder = {
     .type                  = AVMEDIA_TYPE_VIDEO,
     .id                    = AV_CODEC_ID_H264,
     .priv_data_size        = sizeof(H264Context),
-    .init                  = ff_h264_decode_init,
+    .init                  = h264_decode_init,
     .close                 = h264_decode_end,
     .decode                = h264_decode_frame,
     .capabilities          = /*AV_CODEC_CAP_DRAW_HORIZ_BAND |*/ AV_CODEC_CAP_DR1 |
                              AV_CODEC_CAP_DELAY | AV_CODEC_CAP_SLICE_THREADS |
                              AV_CODEC_CAP_FRAME_THREADS,
-    .caps_internal         = FF_CODEC_CAP_INIT_THREADSAFE,
+    .caps_internal         = FF_CODEC_CAP_INIT_THREADSAFE | FF_CODEC_CAP_EXPORTS_CROPPING,
     .flush                 = flush_dpb,
     .init_thread_copy      = ONLY_IF_THREADS_ENABLED(decode_init_thread_copy),
     .update_thread_context = ONLY_IF_THREADS_ENABLED(ff_h264_update_thread_context),
@@ -1119,7 +1090,7 @@ AVCodec ff_h264_vdpau_decoder = {
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_H264,
     .priv_data_size = sizeof(H264Context),
-    .init           = ff_h264_decode_init,
+    .init           = h264_decode_init,
     .close          = h264_decode_end,
     .decode         = h264_decode_frame,
     .capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HWACCEL_VDPAU,

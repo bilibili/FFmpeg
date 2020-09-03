@@ -305,7 +305,7 @@ static int h263p_decode_umotion(MpegEncContext * s, int pred)
       code += get_bits1(&s->gb);
       if (code >= 32768) {
           avpriv_request_sample(s->avctx, "Huge DMV");
-          return AVERROR_INVALIDDATA;
+          return 0xffff;
       }
    }
    sign = code & 1;
@@ -574,7 +574,7 @@ not_coded:
 
 static int h263_skip_b_part(MpegEncContext *s, int cbp)
 {
-    LOCAL_ALIGNED_16(int16_t, dblock, [64]);
+    LOCAL_ALIGNED_32(int16_t, dblock, [64]);
     int i, mbi;
     int bli[6];
 

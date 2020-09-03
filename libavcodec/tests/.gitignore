@@ -1,11 +1,13 @@
 /avfft
 /avpacket
 /cabac
+/celp_math
 /dct
 /fft
 /fft-fixed
 /fft-fixed32
 /golomb
+/htmlsubtitles
 /iirfilter
 /imgconvert
 /jpeg2000dwt

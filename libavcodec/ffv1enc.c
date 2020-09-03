@@ -252,14 +252,7 @@ static inline void put_vlc_symbol(PutBitContext *pb, VlcState *const state,
 
     av_assert2(k <= 13);
 
-#if 0 // JPEG LS
-    if (k == 0 && 2 * state->drift <= -state->count)
-        code = v ^ (-1);
-    else
-        code = v;
-#else
     code = v ^ ((2 * state->drift + state->count) >> 31);
-#endif
 
     ff_dlog(NULL, "v:%d/%d bias:%d error:%d drift:%d count:%d k:%d\n", v, code,
             state->bias, state->error_sum, state->drift, state->count, k);
@@ -855,10 +848,22 @@ FF_ENABLE_DEPRECATION_WARNINGS
     }
 
     if (s->version > 1) {
+        int plane_count = 1 + 2*s->chroma_planes + s->transparency;
+        int max_h_slices = AV_CEIL_RSHIFT(avctx->width , s->chroma_h_shift);
+        int max_v_slices = AV_CEIL_RSHIFT(avctx->height, s->chroma_v_shift);
         s->num_v_slices = (avctx->width > 352 || avctx->height > 288 || !avctx->slices) ? 2 : 1;
-        for (; s->num_v_slices < 9; s->num_v_slices++) {
+
+        s->num_v_slices = FFMIN(s->num_v_slices, max_v_slices);
+
+        for (; s->num_v_slices < 32; s->num_v_slices++) {
             for (s->num_h_slices = s->num_v_slices; s->num_h_slices < 2*s->num_v_slices; s->num_h_slices++) {
-                if (avctx->slices == s->num_h_slices * s->num_v_slices && avctx->slices <= 64 || !avctx->slices)
+                int maxw = (avctx->width  + s->num_h_slices - 1) / s->num_h_slices;
+                int maxh = (avctx->height + s->num_v_slices - 1) / s->num_v_slices;
+                if (s->num_h_slices > max_h_slices || s->num_v_slices > max_v_slices)
+                    continue;
+                if (maxw * maxh * (int64_t)(s->bits_per_raw_sample+1) * plane_count > 8<<24)
+                    continue;
+                if (avctx->slices == s->num_h_slices * s->num_v_slices && avctx->slices <= MAX_SLICES || !avctx->slices)
                     goto slices_ok;
             }
         }

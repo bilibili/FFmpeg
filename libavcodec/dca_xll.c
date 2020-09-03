@@ -658,7 +658,7 @@ static void chs_filter_band_data(DCAXllDecoder *s, DCAXllChSet *c, int band)
             // Inverse fixed coefficient prediction
             for (j = 0; j < b->fixed_pred_order[i]; j++)
                 for (k = 1; k < nsamples; k++)
-                    buf[k] += buf[k - 1];
+                    buf[k] += (unsigned)buf[k - 1];
         }
     }
 
@@ -1028,7 +1028,7 @@ static int parse_band_data(DCAXllDecoder *s)
                             return ret;
                         chs_clear_band_data(s, c, band, seg);
                     }
-                    s->gb.index = navi_pos;
+                    skip_bits_long(&s->gb, navi_pos - get_bits_count(&s->gb));
                 }
                 navi_ptr++;
             }
@@ -1312,7 +1312,7 @@ static int combine_residual_frame(DCAXllDecoder *s, DCAXllChSet *c)
         } else {
             // No downmix scaling
             for (n = 0; n < nsamples; n++)
-                dst[n] += (src[n] + round) >> shift;
+                dst[n] += (unsigned)((src[n] + round) >> shift);
         }
     }
 

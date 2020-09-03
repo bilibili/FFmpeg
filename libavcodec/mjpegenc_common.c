@@ -91,13 +91,17 @@ static void jpeg_table_header(AVCodecContext *avctx, PutBitContext *p,
 {
     int i, j, size;
     uint8_t *ptr;
-    MpegEncContext *s = avctx->priv_data;
+    MpegEncContext *s = NULL;
+
+    /* Since avctx->priv_data will point to LJpegEncContext in this case */
+    if (avctx->codec_id != AV_CODEC_ID_LJPEG)
+        s = avctx->priv_data;
 
     if (avctx->codec_id != AV_CODEC_ID_LJPEG) {
         int matrix_count = 1 + !!memcmp(luma_intra_matrix,
                                         chroma_intra_matrix,
                                         sizeof(luma_intra_matrix[0]) * 64);
-    if (s->force_duplicated_matrix)
+    if (s && s->force_duplicated_matrix)
         matrix_count = 2;
     /* quant matrixes */
     put_marker(p, DQT);
@@ -134,7 +138,7 @@ static void jpeg_table_header(AVCodecContext *avctx, PutBitContext *p,
 
     // Only MJPEG can have a variable Huffman variable. All other
     // formats use the default Huffman table.
-    if (s->out_format == FMT_MJPEG && s->huffman == HUFFMAN_TABLE_OPTIMAL) {
+    if (s && s->huffman == HUFFMAN_TABLE_OPTIMAL) {
         size += put_huffman_table(p, 0, 0, s->mjpeg_ctx->bits_dc_luminance,
                                   s->mjpeg_ctx->val_dc_luminance);
         size += put_huffman_table(p, 0, 1, s->mjpeg_ctx->bits_dc_chrominance,
@@ -353,6 +357,54 @@ end:
         for(i=1; i<s->slice_context_count; i++)
             s->thread_context[i]->esc_pos = 0;
     }
+}
+
+/**
+ * Encodes and outputs the entire frame in the JPEG format.
+ *
+ * @param s The MpegEncContext.
+ */
+void ff_mjpeg_encode_picture_frame(MpegEncContext *s)
+{
+    int i, nbits, code, table_id;
+    MJpegContext *m = s->mjpeg_ctx;
+    uint8_t *huff_size[4] = {m->huff_size_dc_luminance,
+                             m->huff_size_dc_chrominance,
+                             m->huff_size_ac_luminance,
+                             m->huff_size_ac_chrominance};
+    uint16_t *huff_code[4] = {m->huff_code_dc_luminance,
+                              m->huff_code_dc_chrominance,
+                              m->huff_code_ac_luminance,
+                              m->huff_code_ac_chrominance};
+    size_t total_bits = 0;
+    size_t bytes_needed;
+
+    s->header_bits = get_bits_diff(s);
+    // Estimate the total size first
+    for (i = 0; i < m->huff_ncode; i++) {
+        table_id = m->huff_buffer[i].table_id;
+        code = m->huff_buffer[i].code;
+        nbits = code & 0xf;
+
+        total_bits += huff_size[table_id][code] + nbits;
+    }
+
+    bytes_needed = (total_bits + 7) / 8;
+    ff_mpv_reallocate_putbitbuffer(s, bytes_needed, bytes_needed);
+
+    for (i = 0; i < m->huff_ncode; i++) {
+        table_id = m->huff_buffer[i].table_id;
+        code = m->huff_buffer[i].code;
+        nbits = code & 0xf;
+
+        put_bits(&s->pb, huff_size[table_id][code], huff_code[table_id][code]);
+        if (nbits != 0) {
+            put_sbits(&s->pb, nbits, m->huff_buffer[i].mant);
+        }
+    }
+
+    m->huff_ncode = 0;
+    s->i_tex_bits = get_bits_diff(s);
 }
 
 void ff_mjpeg_escape_FF(PutBitContext *pb, int start)

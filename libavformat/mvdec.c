@@ -342,6 +342,8 @@ static int mv_read_header(AVFormatContext *avctx)
             uint32_t pos   = avio_rb32(pb);
             uint32_t asize = avio_rb32(pb);
             uint32_t vsize = avio_rb32(pb);
+            if (avio_feof(pb))
+                return AVERROR_INVALIDDATA;
             avio_skip(pb, 8);
             av_add_index_entry(ast, pos, timestamp, asize, 0, AVINDEX_KEYFRAME);
             av_add_index_entry(vst, pos + asize, i, vsize, 0, AVINDEX_KEYFRAME);
@@ -421,7 +423,7 @@ static int mv_read_packet(AVFormatContext *avctx, AVPacket *pkt)
         if (index->pos > pos)
             avio_skip(pb, index->pos - pos);
         else if (index->pos < pos) {
-            if (!pb->seekable)
+            if (!(pb->seekable & AVIO_SEEKABLE_NORMAL))
                 return AVERROR(EIO);
             ret = avio_seek(pb, index->pos, SEEK_SET);
             if (ret < 0)
@@ -463,7 +465,7 @@ static int mv_read_seek(AVFormatContext *avctx, int stream_index,
     if ((flags & AVSEEK_FLAG_FRAME) || (flags & AVSEEK_FLAG_BYTE))
         return AVERROR(ENOSYS);
 
-    if (!avctx->pb->seekable)
+    if (!(avctx->pb->seekable & AVIO_SEEKABLE_NORMAL))
         return AVERROR(EIO);
 
     frame = av_index_search_timestamp(st, timestamp, flags);

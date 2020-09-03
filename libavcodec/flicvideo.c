@@ -199,6 +199,9 @@ static int flic_decode_frame_8BPP(AVCodecContext *avctx,
     num_chunks = bytestream2_get_le16(&g2);
     bytestream2_skip(&g2, 8);  /* skip padding */
 
+    if (frame_size < 16)
+        return AVERROR_INVALIDDATA;
+
     frame_size -= 16;
 
     /* iterate through the chunks */
@@ -269,10 +272,14 @@ static int flic_decode_frame_8BPP(AVCodecContext *avctx,
             while (compressed_lines > 0) {
                 if (bytestream2_tell(&g2) + 2 > stream_ptr_after_chunk)
                     break;
+                if (y_ptr > pixel_limit)
+                    return AVERROR_INVALIDDATA;
                 line_packets = bytestream2_get_le16(&g2);
                 if ((line_packets & 0xC000) == 0xC000) {
                     // line skip opcode
                     line_packets = -line_packets;
+                    if (line_packets > s->avctx->height)
+                        return AVERROR_INVALIDDATA;
                     y_ptr += line_packets * s->frame->linesize[0];
                 } else if ((line_packets & 0xC000) == 0x4000) {
                     av_log(avctx, AV_LOG_ERROR, "Undefined opcode (%x) in DELTA_FLI\n", line_packets);
@@ -321,6 +328,8 @@ static int flic_decode_frame_8BPP(AVCodecContext *avctx,
         case FLI_LC:
             /* line compressed */
             starting_line = bytestream2_get_le16(&g2);
+            if (starting_line >= s->avctx->height)
+                return AVERROR_INVALIDDATA;
             y_ptr = 0;
             y_ptr += starting_line * s->frame->linesize[0];
 
@@ -444,8 +453,12 @@ static int flic_decode_frame_8BPP(AVCodecContext *avctx,
             break;
         }
 
-        if (stream_ptr_after_chunk - bytestream2_tell(&g2) > 0)
+        if (stream_ptr_after_chunk - bytestream2_tell(&g2) >= 0) {
             bytestream2_skip(&g2, stream_ptr_after_chunk - bytestream2_tell(&g2));
+        } else {
+            av_log(avctx, AV_LOG_ERROR, "Chunk overread\n");
+            break;
+        }
 
         frame_size -= chunk_size;
         num_chunks--;
@@ -519,6 +532,8 @@ static int flic_decode_frame_15_16BPP(AVCodecContext *avctx,
     if (frame_size > buf_size)
         frame_size = buf_size;
 
+    if (frame_size < 16)
+        return AVERROR_INVALIDDATA;
     frame_size -= 16;
 
     /* iterate through the chunks */
@@ -555,9 +570,13 @@ static int flic_decode_frame_15_16BPP(AVCodecContext *avctx,
             while (compressed_lines > 0) {
                 if (bytestream2_tell(&g2) + 2 > stream_ptr_after_chunk)
                     break;
+                if (y_ptr > pixel_limit)
+                    return AVERROR_INVALIDDATA;
                 line_packets = bytestream2_get_le16(&g2);
                 if (line_packets < 0) {
                     line_packets = -line_packets;
+                    if (line_packets > s->avctx->height)
+                        return AVERROR_INVALIDDATA;
                     y_ptr += line_packets * s->frame->linesize[0];
                 } else {
                     compressed_lines--;
@@ -742,6 +761,13 @@ static int flic_decode_frame_15_16BPP(AVCodecContext *avctx,
             break;
         }
 
+        if (stream_ptr_after_chunk - bytestream2_tell(&g2) >= 0) {
+            bytestream2_skip(&g2, stream_ptr_after_chunk - bytestream2_tell(&g2));
+        } else {
+            av_log(avctx, AV_LOG_ERROR, "Chunk overread\n");
+            break;
+        }
+
         frame_size -= chunk_size;
         num_chunks--;
     }
@@ -804,6 +830,8 @@ static int flic_decode_frame_24BPP(AVCodecContext *avctx,
     if (frame_size > buf_size)
         frame_size = buf_size;
 
+    if (frame_size < 16)
+        return AVERROR_INVALIDDATA;
     frame_size -= 16;
 
     /* iterate through the chunks */
@@ -840,9 +868,13 @@ static int flic_decode_frame_24BPP(AVCodecContext *avctx,
             while (compressed_lines > 0) {
                 if (bytestream2_tell(&g2) + 2 > stream_ptr_after_chunk)
                     break;
+                if (y_ptr > pixel_limit)
+                    return AVERROR_INVALIDDATA;
                 line_packets = bytestream2_get_le16(&g2);
                 if (line_packets < 0) {
                     line_packets = -line_packets;
+                    if (line_packets > s->avctx->height)
+                        return AVERROR_INVALIDDATA;
                     y_ptr += line_packets * s->frame->linesize[0];
                 } else {
                     compressed_lines--;
@@ -1013,6 +1045,13 @@ static int flic_decode_frame_24BPP(AVCodecContext *avctx,
 
         default:
             av_log(avctx, AV_LOG_ERROR, "Unrecognized chunk type: %d\n", chunk_type);
+            break;
+        }
+
+        if (stream_ptr_after_chunk - bytestream2_tell(&g2) >= 0) {
+            bytestream2_skip(&g2, stream_ptr_after_chunk - bytestream2_tell(&g2));
+        } else {
+            av_log(avctx, AV_LOG_ERROR, "Chunk overread\n");
             break;
         }
 

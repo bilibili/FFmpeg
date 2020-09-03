@@ -296,8 +296,8 @@ static int parse_dsd_prop(AVFormatContext *s, AVStream *st, uint64_t eof)
             st->codecpar->codec_tag = tag = avio_rl32(pb);
             st->codecpar->codec_id = ff_codec_get_id(dsd_codec_tags, tag);
             if (!st->codecpar->codec_id) {
-                av_log(s, AV_LOG_ERROR, "'%c%c%c%c' compression is not supported\n",
-                    tag&0xFF, (tag>>8)&0xFF, (tag>>16)&0xFF, (tag>>24)&0xFF);
+                av_log(s, AV_LOG_ERROR, "'%s' compression is not supported\n",
+                       av_fourcc2str(tag));
                 return AVERROR_PATCHWELCOME;
             }
             break;
@@ -312,7 +312,8 @@ static int parse_dsd_prop(AVFormatContext *s, AVStream *st, uint64_t eof)
             id3v2_extra_meta = NULL;
             ff_id3v2_read(s, ID3v2_DEFAULT_MAGIC, &id3v2_extra_meta, size);
             if (id3v2_extra_meta) {
-                if ((ret = ff_id3v2_parse_apic(s, &id3v2_extra_meta)) < 0) {
+                if ((ret = ff_id3v2_parse_apic(s, &id3v2_extra_meta)) < 0 ||
+                    (ret = ff_id3v2_parse_chapters(s, &id3v2_extra_meta)) < 0) {
                     ff_id3v2_free_extra_meta(&id3v2_extra_meta);
                     return ret;
                 }

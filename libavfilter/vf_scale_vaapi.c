@@ -32,6 +32,7 @@
 #include "formats.h"
 #include "internal.h"
 #include "scale.h"
+#include "video.h"
 
 typedef struct ScaleVAAPIContext {
     const AVClass *class;
@@ -273,6 +274,7 @@ static int scale_vaapi_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
     VASurfaceID input_surface, output_surface;
     VAProcPipelineParameterBuffer params;
     VABufferID params_id;
+    VARectangle input_region;
     VAStatus vas;
     int err;
 
@@ -287,17 +289,11 @@ static int scale_vaapi_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
     av_log(ctx, AV_LOG_DEBUG, "Using surface %#x for scale input.\n",
            input_surface);
 
-    output_frame = av_frame_alloc();
+    output_frame = ff_get_video_buffer(outlink, ctx->output_width,
+                                       ctx->output_height);
     if (!output_frame) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to allocate output frame.");
         err = AVERROR(ENOMEM);
         goto fail;
-    }
-
-    err = av_hwframe_get_buffer(ctx->output_frames_ref, output_frame, 0);
-    if (err < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to get surface for "
-               "output: %d\n.", err);
     }
 
     output_surface = (VASurfaceID)(uintptr_t)output_frame->data[3];
@@ -306,8 +302,17 @@ static int scale_vaapi_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
 
     memset(&params, 0, sizeof(params));
 
+    // If there were top/left cropping, it could be taken into
+    // account here.
+    input_region = (VARectangle) {
+        .x      = 0,
+        .y      = 0,
+        .width  = input_frame->width,
+        .height = input_frame->height,
+    };
+
     params.surface = input_surface;
-    params.surface_region = 0;
+    params.surface_region = &input_region;
     params.surface_color_standard =
         vaapi_proc_colour_standard(input_frame->colorspace);
 
@@ -356,7 +361,7 @@ static int scale_vaapi_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
         goto fail_after_render;
     }
 
-    if (ctx->hwctx->driver_quirks &
+    if (CONFIG_VAAPI_1 || ctx->hwctx->driver_quirks &
         AV_VAAPI_DRIVER_QUIRK_RENDER_PARAM_BUFFERS) {
         vas = vaDestroyBuffer(ctx->hwctx->display, params_id);
         if (vas != VA_STATUS_SUCCESS) {
@@ -472,4 +477,5 @@ AVFilter ff_vf_scale_vaapi = {
     .inputs        = scale_vaapi_inputs,
     .outputs       = scale_vaapi_outputs,
     .priv_class    = &scale_vaapi_class,
+    .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
 };

@@ -21,7 +21,7 @@
  */
 
 #include "get_bits.h"
-#include "hevc.h"
+#include "hevcdec.h"
 
 #include "bit_depth_template.c"
 #include "hevcdsp.h"
@@ -393,8 +393,8 @@ static void FUNC(sao_edge_restore_0)(uint8_t *_dst, uint8_t *_src,
         }
         if (borders[3]) {
             int offset_val   = sao_offset_val[0];
-            int y_stride_dst = stride_dst * (height - 1);
-            int y_stride_src = stride_src * (height - 1);
+            ptrdiff_t y_stride_dst = stride_dst * (height - 1);
+            ptrdiff_t y_stride_src = stride_src * (height - 1);
             for (x = init_x; x < width; x++)
                 dst[x + y_stride_dst] = av_clip_pixel(src[x + y_stride_src] + offset_val);
             height--;
@@ -444,8 +444,8 @@ static void FUNC(sao_edge_restore_1)(uint8_t *_dst, uint8_t *_src,
         }
         if (borders[3]) {
             int offset_val   = sao_offset_val[0];
-            int y_stride_dst = stride_dst * (height - 1);
-            int y_stride_src = stride_src * (height - 1);
+            ptrdiff_t y_stride_dst = stride_dst * (height - 1);
+            ptrdiff_t y_stride_src = stride_src * (height - 1);
             for (x = init_x; x < width; x++)
                 dst[x + y_stride_dst] = av_clip_pixel(src[x + y_stride_src] + offset_val);
             height--;
@@ -593,7 +593,7 @@ static void FUNC(put_hevc_pel_bi_w_pixels)(uint8_t *_dst, ptrdiff_t _dststride, 
     ox1     = ox1 * (1 << (BIT_DEPTH - 8));
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++) {
-            dst[x] = av_clip_pixel(( (src[x] << (14 - BIT_DEPTH)) * wx1 + src2[x] * wx0 + ((ox0 + ox1 + 1) << log2Wd)) >> (log2Wd + 1));
+            dst[x] = av_clip_pixel(( (src[x] << (14 - BIT_DEPTH)) * wx1 + src2[x] * wx0 + (ox0 + ox1 + 1) * (1 << log2Wd)) >> (log2Wd + 1));
         }
         src  += srcstride;
         dst  += dststride;
@@ -1486,7 +1486,7 @@ static void FUNC(put_hevc_epel_bi_w_hv)(uint8_t *_dst, ptrdiff_t _dststride, uin
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++)
             dst[x] = av_clip_pixel(((EPEL_FILTER(tmp, MAX_PB_SIZE) >> 6) * wx1 + src2[x] * wx0 +
-                                    ((ox0 + ox1 + 1) << log2Wd)) >> (log2Wd + 1));
+                                    ((ox0 + ox1 + 1) * (1 << log2Wd))) >> (log2Wd + 1));
         tmp  += MAX_PB_SIZE;
         dst  += dststride;
         src2 += MAX_PB_SIZE;

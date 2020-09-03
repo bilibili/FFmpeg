@@ -1,7 +1,61 @@
 Entries are sorted chronologically from oldest to youngest within each release,
 releases are sorted from youngest to oldest.
 
-version <next>:
+version 3.4:
+- deflicker video filter
+- doubleweave video filter
+- lumakey video filter
+- pixscope video filter
+- oscilloscope video filter
+- config.log and other configuration files moved into ffbuild/ directory
+- update cuvid/nvenc headers to Video Codec SDK 8.0.14
+- afir audio filter
+- scale_cuda CUDA based video scale filter
+- librsvg support for svg rasterization
+- crossfeed audio filter
+- spec compliant VP9 muxing support in MP4
+- remove the libnut muxer/demuxer wrappers
+- remove the libschroedinger encoder/decoder wrappers
+- surround audio filter
+- sofalizer filter switched to libmysofa
+- Gremlin Digital Video demuxer and decoder
+- headphone audio filter
+- superequalizer audio filter
+- roberts video filter
+- The x86 assembler default switched from yasm to nasm, pass
+  --x86asmexe=yasm to configure to restore the old behavior.
+- additional frame format support for Interplay MVE movies
+- support for decoding through D3D11VA in ffmpeg
+- limiter video filter
+- libvmaf video filter
+- Dolby E decoder and SMPTE 337M demuxer
+- unpremultiply video filter
+- tlut2 video filter
+- floodfill video filter
+- pseudocolor video filter
+- raw G.726 muxer and demuxer, left- and right-justified
+- NewTek NDI input/output device
+- Some video filters with several inputs now use a common set of options:
+  blend, libvmaf, lut3d, overlay, psnr, ssim.
+  They must always be used by name.
+- FITS demuxer and decoder
+- FITS muxer and encoder
+- add --disable-autodetect build switch
+- drop deprecated qtkit input device (use avfoundation instead)
+- despill video filter
+- haas audio filter
+- SUP/PGS subtitle muxer
+- convolve video filter
+- VP9 tile threading support
+- KMS screen grabber
+- CUDA thumbnail filter
+- V4L2 mem2mem HW assisted codecs
+- Rockchip MPP hardware decoding
+- vmafmotion video filter
+- use MIME type "G726" for little-endian G.726, "AAL2-G726" for big-endian G.726
+
+
+version 3.3:
 - CrystalHD decoder moved to new decode API
 - add internal ebur128 library, remove external libebur128 dependency
 - Pro-MPEG CoP #3-R2 FEC protocol
@@ -22,9 +76,20 @@ version <next>:
 - threshold filter
 - midequalizer filter
 - Optimal Huffman tables for (M)JPEG encoding
+- VAAPI-accelerated MPEG-2 and VP8 encoding
 - FM Screen Capture Codec decoder
 - native Opus encoder
 - ScreenPressor decoder
+- incomplete ClearVideo decoder
+- Intel QSV video scaling and deinterlacing filters
+- Support MOV with multiple sample description tables
+- XPM decoder
+- Removed the legacy X11 screen grabber, use XCB instead
+- MPEG-7 Video Signature filter
+- Removed asyncts filter (use af_aresample instead)
+- Intel QSV-accelerated VP8 video decoding
+- VAAPI-accelerated deinterlacing
+
 
 version 3.2:
 - libopenmpt demuxer
@@ -111,7 +176,6 @@ version 3.1:
 - libutvideo wrapper removed
 - YUY2 Lossless Codec decoder
 - VideoToolbox H.264 encoder
-- VAAPI-accelerated MPEG-2 and VP8 encoding
 
 
 version 3.0:

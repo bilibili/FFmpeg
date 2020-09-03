@@ -108,6 +108,7 @@ typedef struct VPxEncoderContext {
     int noise_sensitivity;
     int vpx_cs;
     float level;
+    int row_mt;
 } VPxContext;
 
 /** String mappings for enum vp8e_enc_control_id */
@@ -138,6 +139,9 @@ static const char *const ctlidstr[] = {
 #if VPX_ENCODER_ABI_VERSION >= 12
     [VP9E_SET_TARGET_LEVEL]            = "VP9E_SET_TARGET_LEVEL",
     [VP9E_GET_LEVEL]                   = "VP9E_GET_LEVEL",
+#endif
+#ifdef VPX_CTRL_VP9E_SET_ROW_MT
+    [VP9E_SET_ROW_MT]                  = "VP9E_SET_ROW_MT",
 #endif
 #endif
 };
@@ -720,6 +724,10 @@ FF_ENABLE_DEPRECATION_WARNINGS
 #if VPX_ENCODER_ABI_VERSION >= 12
         codecctl_int(avctx, VP9E_SET_TARGET_LEVEL, ctx->level < 0 ? 255 : lrint(ctx->level * 10));
 #endif
+#ifdef VPX_CTRL_VP9E_SET_ROW_MT
+        if (ctx->row_mt >= 0)
+            codecctl_int(avctx, VP9E_SET_ROW_MT, ctx->row_mt);
+#endif
     }
 #endif
 
@@ -1012,6 +1020,16 @@ static int vpx_encode(AVCodecContext *avctx, AVPacket *pkt,
             rawimg_alpha->stride[VPX_PLANE_V] = frame->linesize[2];
         }
         timestamp                   = frame->pts;
+#if VPX_IMAGE_ABI_VERSION >= 4
+        switch (frame->color_range) {
+        case AVCOL_RANGE_MPEG:
+            rawimg->range = VPX_CR_STUDIO_RANGE;
+            break;
+        case AVCOL_RANGE_JPEG:
+            rawimg->range = VPX_CR_FULL_RANGE;
+            break;
+        }
+#endif
         if (frame->pict_type == AV_PICTURE_TYPE_I)
             flags |= VPX_EFLAG_FORCE_KF;
     }
@@ -1124,13 +1142,21 @@ static const AVOption vp9_options[] = {
     { "tile-columns",    "Number of tile columns to use, log2",         OFFSET(tile_columns),    AV_OPT_TYPE_INT, {.i64 = -1}, -1, 6, VE},
     { "tile-rows",       "Number of tile rows to use, log2",            OFFSET(tile_rows),       AV_OPT_TYPE_INT, {.i64 = -1}, -1, 2, VE},
     { "frame-parallel",  "Enable frame parallel decodability features", OFFSET(frame_parallel),  AV_OPT_TYPE_BOOL,{.i64 = -1}, -1, 1, VE},
+#if VPX_ENCODER_ABI_VERSION >= 12
+    { "aq-mode",         "adaptive quantization mode",                  OFFSET(aq_mode),         AV_OPT_TYPE_INT, {.i64 = -1}, -1, 4, VE, "aq_mode"},
+#else
     { "aq-mode",         "adaptive quantization mode",                  OFFSET(aq_mode),         AV_OPT_TYPE_INT, {.i64 = -1}, -1, 3, VE, "aq_mode"},
+#endif
     { "none",            "Aq not used",         0, AV_OPT_TYPE_CONST, {.i64 = 0}, 0, 0, VE, "aq_mode" },
     { "variance",        "Variance based Aq",   0, AV_OPT_TYPE_CONST, {.i64 = 1}, 0, 0, VE, "aq_mode" },
     { "complexity",      "Complexity based Aq", 0, AV_OPT_TYPE_CONST, {.i64 = 2}, 0, 0, VE, "aq_mode" },
     { "cyclic",          "Cyclic Refresh Aq",   0, AV_OPT_TYPE_CONST, {.i64 = 3}, 0, 0, VE, "aq_mode" },
 #if VPX_ENCODER_ABI_VERSION >= 12
+    { "equator360",      "360 video Aq",        0, AV_OPT_TYPE_CONST, {.i64 = 4}, 0, 0, VE, "aq_mode" },
     {"level", "Specify level", OFFSET(level), AV_OPT_TYPE_FLOAT, {.dbl=-1}, -1, 6.2, VE},
+#endif
+#ifdef VPX_CTRL_VP9E_SET_ROW_MT
+    {"row-mt", "Row based multi-threading", OFFSET(row_mt), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, VE},
 #endif
     LEGACY_OPTIONS
     { NULL }

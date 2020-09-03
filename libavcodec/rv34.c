@@ -521,7 +521,7 @@ static int calc_add_mv(RV34DecContext *r, int dir, int val)
 {
     int mul = dir ? -r->mv_weight2 : r->mv_weight1;
 
-    return (val * mul + 0x2000) >> 14;
+    return (int)(val * (SUINT)mul + 0x2000) >> 14;
 }
 
 /**
@@ -1636,7 +1636,7 @@ static AVRational update_sar(int old_w, int old_h, AVRational sar, int new_w, in
     if (!sar.num)
         sar = (AVRational){1, 1};
 
-    sar = av_mul_q(sar, (AVRational){new_h * old_w, new_w * old_h});
+    sar = av_mul_q(sar, av_mul_q((AVRational){new_h, new_w}, (AVRational){old_w, old_h}));
     return sar;
 }
 
@@ -1762,6 +1762,9 @@ int ff_rv34_decode_frame(AVCodecContext *avctx,
                 r->mv_weight1 = r->mv_weight2 = r->weight1 = r->weight2 = 8192;
                 r->scaled_weight = 0;
             }else{
+                if (FFMAX(dist0, dist1) > refdist)
+                    av_log(avctx, AV_LOG_TRACE, "distance overflow\n");
+
                 r->mv_weight1 = (dist0 << 14) / refdist;
                 r->mv_weight2 = (dist1 << 14) / refdist;
                 if((r->mv_weight1|r->mv_weight2) & 511){

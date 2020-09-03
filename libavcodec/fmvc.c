@@ -380,18 +380,14 @@ static int decode_type1(GetByteContext *gb, PutByteContext *pb)
             bytestream2_put_byte(pb, bytestream2_get_byte(&gbc));
             bytestream2_put_byte(pb, bytestream2_get_byte(&gbc));
             bytestream2_put_byte(pb, bytestream2_get_byte(&gbc));
-            do {
-                bytestream2_put_byte(pb, bytestream2_get_byte(&gbc));
-                --len;
-            } while (len && bytestream2_get_bytes_left(&gbc) > 0);
         } else {
             bytestream2_put_le32(pb, bytestream2_get_le32(&gbc));
             len--;
-            do {
-                bytestream2_put_byte(pb, bytestream2_get_byte(&gbc));
-                len--;
-            } while (len && bytestream2_get_bytes_left(&gbc) > 0);
         }
+        do {
+            bytestream2_put_byte(pb, bytestream2_get_byte(&gbc));
+            len--;
+        } while (len && bytestream2_get_bytes_left(&gbc) > 0);
     }
 
     return 0;
@@ -463,7 +459,7 @@ static int decode_frame(AVCodecContext *avctx,
             int size, offset, start = 0;
 
             offset = bytestream2_get_le16(gb);
-            if (offset > s->nb_blocks)
+            if (offset >= s->nb_blocks)
                 return AVERROR_INVALIDDATA;
 
             size = bytestream2_get_le16(gb);
@@ -565,6 +561,9 @@ static av_cold int decode_init(AVCodecContext *avctx)
     }
 
     s->nb_blocks = s->xb * s->yb;
+    if (!s->nb_blocks)
+        return AVERROR_INVALIDDATA;
+
     s->blocks = av_calloc(s->nb_blocks, sizeof(*s->blocks));
     if (!s->blocks)
         return AVERROR(ENOMEM);
@@ -597,8 +596,8 @@ static av_cold int decode_init(AVCodecContext *avctx)
     s->bpp = avctx->bits_per_coded_sample >> 3;
     s->buffer_size = avctx->width * avctx->height * 4;
     s->pbuffer_size = avctx->width * avctx->height * 4;
-    s->buffer = av_malloc(s->buffer_size);
-    s->pbuffer = av_malloc(s->pbuffer_size);
+    s->buffer = av_mallocz(s->buffer_size);
+    s->pbuffer = av_mallocz(s->pbuffer_size);
     if (!s->buffer || !s->pbuffer)
         return AVERROR(ENOMEM);
 

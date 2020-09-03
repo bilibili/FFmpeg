@@ -19,8 +19,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-//#define DEBUG
-
 #include <math.h>
 
 #include "avformat.h"
@@ -332,7 +330,7 @@ static int avi_write_header(AVFormatContext *s)
         avio_wl32(pb, 0);
     avio_wl32(pb, bitrate / 8); /* XXX: not quite exact */
     avio_wl32(pb, 0); /* padding */
-    if (!pb->seekable)
+    if (!(pb->seekable & AVIO_SEEKABLE_NORMAL))
         avio_wl32(pb, AVIF_TRUSTCKTYPE | AVIF_ISINTERLEAVED);  /* flags */
     else
         avio_wl32(pb, AVIF_TRUSTCKTYPE | AVIF_HASINDEX | AVIF_ISINTERLEAVED);  /* flags */
@@ -368,8 +366,7 @@ static int avi_write_header(AVFormatContext *s)
             // XSUB subtitles behave like video tracks, other subtitles
             // are not (yet) supported.
             if (par->codec_id != AV_CODEC_ID_XSUB) {
-                av_log(s, AV_LOG_ERROR,
-                       "Subtitle streams other than DivX XSUB are not supported by the AVI muxer.\n");
+                avpriv_report_missing_feature(s, "Subtitle streams other than DivX XSUB");
                 return AVERROR_PATCHWELCOME;
             }
         case AVMEDIA_TYPE_VIDEO:
@@ -414,7 +411,7 @@ static int avi_write_header(AVFormatContext *s)
         avio_wl32(pb, 0); /* start */
         /* remember this offset to fill later */
         avist->frames_hdr_strm = avio_tell(pb);
-        if (!pb->seekable)
+        if (!(pb->seekable & AVIO_SEEKABLE_NORMAL))
             /* FIXME: this may be broken, but who cares */
             avio_wl32(pb, AVI_MAX_RIFF_SIZE);
         else
@@ -453,7 +450,7 @@ static int avi_write_header(AVFormatContext *s)
                     && par->bits_per_coded_sample == 15)
                     par->bits_per_coded_sample = 16;
                 avist->pal_offset = avio_tell(pb) + 40;
-                ff_put_bmp_header(pb, par, ff_codec_bmp_tags, 0, 0);
+                ff_put_bmp_header(pb, par, 0, 0);
                 pix_fmt = avpriv_find_pix_fmt(avpriv_pix_fmt_bps_avi,
                                               par->bits_per_coded_sample);
                 if (   !par->codec_tag
@@ -493,7 +490,7 @@ static int avi_write_header(AVFormatContext *s)
             }
         }
 
-        if (pb->seekable) {
+        if (pb->seekable & AVIO_SEEKABLE_NORMAL) {
             write_odml_master(s, i);
         }
 
@@ -534,7 +531,7 @@ static int avi_write_header(AVFormatContext *s)
         ff_end_tag(pb, list2);
     }
 
-    if (pb->seekable) {
+    if (pb->seekable & AVIO_SEEKABLE_NORMAL) {
         /* AVI could become an OpenDML one, if it grows beyond 2Gb range */
         avi->odml_list = ff_start_tag(pb, "JUNK");
         ffio_wfourcc(pb, "odml");
@@ -611,7 +608,7 @@ static int avi_write_ix(AVFormatContext *s)
     char ix_tag[] = "ix00";
     int i, j;
 
-    av_assert0(pb->seekable);
+    av_assert0(pb->seekable & AVIO_SEEKABLE_NORMAL);
 
     for (i = 0; i < s->nb_streams; i++) {
         AVIStream *avist = s->streams[i]->priv_data;
@@ -669,7 +666,7 @@ static int avi_write_idx1(AVFormatContext *s)
     int i;
     char tag[5];
 
-    if (pb->seekable) {
+    if (pb->seekable & AVIO_SEEKABLE_NORMAL) {
         AVIStream *avist;
         AVIIentry *ie = 0, *tie;
         int empty, stream_id = -1;
@@ -783,7 +780,7 @@ static int avi_write_packet(AVFormatContext *s, AVPacket *pkt)
 
                 av_assert0(par->bits_per_coded_sample >= 0 && par->bits_per_coded_sample <= 8);
 
-                if (pb->seekable && avist->pal_offset) {
+                if ((pb->seekable & AVIO_SEEKABLE_NORMAL) && avist->pal_offset) {
                     int64_t cur_offset = avio_tell(pb);
                     avio_seek(pb, avist->pal_offset, SEEK_SET);
                     for (i = 0; i < pal_size; i++) {
@@ -798,7 +795,7 @@ static int avi_write_packet(AVFormatContext *s, AVPacket *pkt)
                     unsigned char tag[5];
                     avi_stream2fourcc(tag, stream_index, par->codec_type);
                     tag[2] = 'p'; tag[3] = 'c';
-                    if (s->pb->seekable) {
+                    if (s->pb->seekable & AVIO_SEEKABLE_NORMAL) {
                         if (avist->strh_flags_offset) {
                             int64_t cur_offset = avio_tell(pb);
                             avio_seek(pb, avist->strh_flags_offset, SEEK_SET);
@@ -854,7 +851,7 @@ static int avi_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
     avist->packet_count++;
 
     // Make sure to put an OpenDML chunk when the file size exceeds the limits
-    if (pb->seekable &&
+    if ((pb->seekable & AVIO_SEEKABLE_NORMAL) &&
         (avio_tell(pb) - avi->riff_start > AVI_MAX_RIFF_SIZE)) {
         avi_write_ix(s);
         ff_end_tag(pb, avi->movi_list);
@@ -872,7 +869,7 @@ static int avi_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
     if (par->codec_type == AVMEDIA_TYPE_AUDIO)
         avist->audio_strm_length += size;
 
-    if (s->pb->seekable) {
+    if (s->pb->seekable & AVIO_SEEKABLE_NORMAL) {
         int ret;
         ret = avi_add_ientry(s, stream_index, NULL, flags, size);
         if (ret < 0)
@@ -901,7 +898,7 @@ static int avi_write_trailer(AVFormatContext *s)
         write_skip_frames(s, i, avist->last_dts);
     }
 
-    if (pb->seekable) {
+    if (pb->seekable & AVIO_SEEKABLE_NORMAL) {
         if (avi->riff_id == 1) {
             ff_end_tag(pb, avi->movi_list);
             res = avi_write_idx1(s);
@@ -950,7 +947,7 @@ static int avi_write_trailer(AVFormatContext *s)
             av_freep(&avist->indexes.cluster[j]);
         av_freep(&avist->indexes.cluster);
         avist->indexes.ents_allocated = avist->indexes.entry = 0;
-        if (pb->seekable) {
+        if (pb->seekable & AVIO_SEEKABLE_NORMAL) {
             avio_seek(pb, avist->frames_hdr_strm + 4, SEEK_SET);
             avio_wl32(pb, avist->max_size);
         }

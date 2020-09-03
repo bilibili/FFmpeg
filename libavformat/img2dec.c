@@ -34,6 +34,7 @@
 #include "internal.h"
 #include "img2.h"
 #include "libavcodec/mjpeg.h"
+#include "subtitles.h"
 
 #if HAVE_GLOB
 /* Locally define as 0 (bitwise-OR no-op) any missing glob options that
@@ -873,6 +874,22 @@ static int sunrast_probe(AVProbeData *p)
     return 0;
 }
 
+static int svg_probe(AVProbeData *p)
+{
+    const uint8_t *b = p->buf;
+    const uint8_t *end = p->buf + p->buf_size;
+    if (memcmp(p->buf, "<?xml", 5))
+        return 0;
+    while (b < end) {
+        b += ff_subtitles_next_line(b);
+        if (b >= end - 4)
+            return 0;
+        if (!memcmp(b, "<svg", 4))
+            return AVPROBE_SCORE_EXTENSION + 1;
+    }
+    return 0;
+}
+
 static int tiff_probe(AVProbeData *p)
 {
     const uint8_t *b = p->buf;
@@ -943,6 +960,15 @@ static int pam_probe(AVProbeData *p)
     return pnm_magic_check(p, 7) ? pnm_probe(p) : 0;
 }
 
+static int xpm_probe(AVProbeData *p)
+{
+    const uint8_t *b = p->buf;
+
+    if (AV_RB64(b) == 0x2f2a2058504d202a && *(b+8) == '/')
+        return AVPROBE_SCORE_MAX - 1;
+    return 0;
+}
+
 #define IMAGEAUTO_DEMUXER(imgname, codecid)\
 static const AVClass imgname ## _class = {\
     .class_name = AV_STRINGIFY(imgname) " demuxer",\
@@ -981,5 +1007,7 @@ IMAGEAUTO_DEMUXER(psd,     AV_CODEC_ID_PSD)
 IMAGEAUTO_DEMUXER(qdraw,   AV_CODEC_ID_QDRAW)
 IMAGEAUTO_DEMUXER(sgi,     AV_CODEC_ID_SGI)
 IMAGEAUTO_DEMUXER(sunrast, AV_CODEC_ID_SUNRAST)
+IMAGEAUTO_DEMUXER(svg,     AV_CODEC_ID_SVG)
 IMAGEAUTO_DEMUXER(tiff,    AV_CODEC_ID_TIFF)
 IMAGEAUTO_DEMUXER(webp,    AV_CODEC_ID_WEBP)
+IMAGEAUTO_DEMUXER(xpm,     AV_CODEC_ID_XPM)
