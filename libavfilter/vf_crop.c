@@ -258,10 +258,11 @@ static int filter_frame(AVFilterLink *link, AVFrame *frame)
     s->var_values[VAR_N] = link->frame_count_out;
     s->var_values[VAR_T] = frame->pts == AV_NOPTS_VALUE ?
         NAN : frame->pts * av_q2d(link->time_base);
-    s->var_values[VAR_POS] = av_frame_get_pkt_pos(frame) == -1 ?
-        NAN : av_frame_get_pkt_pos(frame);
+    s->var_values[VAR_POS] = frame->pkt_pos == -1 ?
+        NAN : frame->pkt_pos;
     s->var_values[VAR_X] = av_expr_eval(s->x_pexpr, s->var_values, NULL);
     s->var_values[VAR_Y] = av_expr_eval(s->y_pexpr, s->var_values, NULL);
+    /* It is necessary if x is expressed from y  */
     s->var_values[VAR_X] = av_expr_eval(s->x_pexpr, s->var_values, NULL);
 
     normalize_double(&s->x, s->var_values[VAR_X]);
@@ -287,7 +288,7 @@ static int filter_frame(AVFilterLink *link, AVFrame *frame)
     frame->data[0] += s->y * frame->linesize[0];
     frame->data[0] += s->x * s->max_step[0];
 
-    if (!(desc->flags & AV_PIX_FMT_FLAG_PAL || desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL)) {
+    if (!(desc->flags & AV_PIX_FMT_FLAG_PAL || desc->flags & FF_PSEUDOPAL)) {
         for (i = 1; i < 3; i ++) {
             if (frame->data[i]) {
                 frame->data[i] += (s->y >> s->vsub) * frame->linesize[i];

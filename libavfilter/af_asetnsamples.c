@@ -33,7 +33,7 @@
 #include "internal.h"
 #include "formats.h"
 
-typedef struct {
+typedef struct ASNSContext {
     const AVClass *class;
     int nb_out_samples;  ///< how many samples to output
     AVAudioFifo *fifo;   ///< samples are queued here
@@ -140,10 +140,13 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
             return -1;
         }
     }
-    av_audio_fifo_write(asns->fifo, (void **)insamples->extended_data, nb_samples);
-    if (asns->next_out_pts == AV_NOPTS_VALUE)
+    ret = av_audio_fifo_write(asns->fifo, (void **)insamples->extended_data, nb_samples);
+    if (ret > 0 && asns->next_out_pts == AV_NOPTS_VALUE)
         asns->next_out_pts = insamples->pts;
     av_frame_free(&insamples);
+
+    if (ret < 0)
+        return ret;
 
     while (av_audio_fifo_size(asns->fifo) >= asns->nb_out_samples)
         push_samples(outlink);

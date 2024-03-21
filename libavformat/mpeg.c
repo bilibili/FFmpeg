@@ -20,6 +20,7 @@
  */
 
 #include "avformat.h"
+#include "avio_internal.h"
 #include "internal.h"
 #include "mpeg.h"
 
@@ -128,6 +129,7 @@ typedef struct MpegDemuxContext {
     int sofdec;
     int dvd;
     int imkh_cctv;
+    int raw_ac3;
 #if CONFIG_VOBSUB_DEMUXER
     AVFormatContext *sub_ctx;
     FFDemuxSubtitlesQueue q[32];
@@ -442,8 +444,24 @@ redo:
     }
 
     if (startcode == PRIVATE_STREAM_1) {
+        int ret = ffio_ensure_seekback(s->pb, 2);
+
+        if (ret < 0)
+            return ret;
+
         startcode = avio_r8(s->pb);
-        len--;
+        m->raw_ac3 = 0;
+        if (startcode == 0x0b) {
+            if (avio_r8(s->pb) == 0x77) {
+                startcode = 0x80;
+                m->raw_ac3 = 1;
+                avio_skip(s->pb, -2);
+            } else {
+                avio_skip(s->pb, -1);
+            }
+        } else {
+            len--;
+        }
     }
     if (len < 0)
         goto error_redo;
@@ -451,7 +469,7 @@ redo:
         int i;
         for (i = 0; i < s->nb_streams; i++) {
             if (startcode == s->streams[i]->id &&
-                s->pb->seekable /* index useless on streams anyway */) {
+                (s->pb->seekable & AVIO_SEEKABLE_NORMAL) /* index useless on streams anyway */) {
                 ff_reduce_index(s, i);
                 av_add_index_entry(s->streams[i], *ppos, dts, 0, 0,
                                    AVINDEX_KEYFRAME /* FIXME keyframe? */);
@@ -486,14 +504,16 @@ redo:
         if (len < 4)
             goto skip;
 
-        /* audio: skip header */
-        avio_r8(s->pb);
-        lpcm_header_len = avio_rb16(s->pb);
-        len -= 3;
-        if (startcode >= 0xb0 && startcode <= 0xbf) {
-            /* MLP/TrueHD audio has a 4-byte header */
+        if (!m->raw_ac3) {
+            /* audio: skip header */
             avio_r8(s->pb);
-            len--;
+            lpcm_header_len = avio_rb16(s->pb);
+            len -= 3;
+            if (startcode >= 0xb0 && startcode <= 0xbf) {
+                /* MLP/TrueHD audio has a 4-byte header */
+                avio_r8(s->pb);
+                len--;
+            }
         }
     }
 
@@ -568,7 +588,7 @@ redo:
         codec_id = AV_CODEC_ID_DTS;
     } else if (startcode >= 0xa0 && startcode <= 0xaf) {
         type     = AVMEDIA_TYPE_AUDIO;
-        if (lpcm_header_len == 6 || startcode == 0xa1) {
+        if (lpcm_header_len >= 6 && startcode == 0xa1) {
             codec_id = AV_CODEC_ID_MLP;
         } else {
             codec_id = AV_CODEC_ID_PCM_DVD;
@@ -703,7 +723,7 @@ static int vobsub_read_header(AVFormatContext *s)
 
     if (!vobsub->sub_name) {
         char *ext;
-        vobsub->sub_name = av_strdup(s->filename);
+        vobsub->sub_name = av_strdup(s->url);
         if (!vobsub->sub_name) {
             ret = AVERROR(ENOMEM);
             goto end;
@@ -718,7 +738,7 @@ static int vobsub_read_header(AVFormatContext *s)
             goto end;
         }
         memcpy(ext, !strncmp(ext, "IDX", 3) ? "SUB" : "sub", 3);
-        av_log(s, AV_LOG_VERBOSE, "IDX/SUB: %s -> %s\n", s->filename, vobsub->sub_name);
+        av_log(s, AV_LOG_VERBOSE, "IDX/SUB: %s -> %s\n", s->url, vobsub->sub_name);
     }
 
     if (!(iformat = av_find_input_format("mpeg"))) {
@@ -884,7 +904,7 @@ static int vobsub_read_packet(AVFormatContext *s, AVPacket *pkt)
     FFDemuxSubtitlesQueue *q;
     AVIOContext *pb = vobsub->sub_ctx->pb;
     int ret, psize, total_read = 0, i;
-    AVPacket idx_pkt;
+    AVPacket idx_pkt = { 0 };
 
     int64_t min_ts = INT64_MAX;
     int sid = 0;

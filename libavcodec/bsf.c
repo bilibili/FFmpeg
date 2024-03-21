@@ -21,7 +21,6 @@
 #include "libavutil/log.h"
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
-#include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 
@@ -175,12 +174,12 @@ int av_bsf_init(AVBSFContext *ctx)
 
 int av_bsf_send_packet(AVBSFContext *ctx, AVPacket *pkt)
 {
-    if (!pkt) {
+    int ret;
+
+    if (!pkt || (!pkt->data && !pkt->side_data_elems)) {
         ctx->internal->eof = 1;
         return 0;
     }
-
-    av_assert0(pkt->data || pkt->side_data);
 
     if (ctx->internal->eof) {
         av_log(ctx, AV_LOG_ERROR, "A non-NULL packet sent after an EOF.\n");
@@ -191,6 +190,9 @@ int av_bsf_send_packet(AVBSFContext *ctx, AVPacket *pkt)
         ctx->internal->buffer_pkt->side_data_elems)
         return AVERROR(EAGAIN);
 
+    ret = av_packet_make_refcounted(pkt);
+    if (ret < 0)
+        return ret;
     av_packet_move_ref(ctx->internal->buffer_pkt, pkt);
 
     return 0;

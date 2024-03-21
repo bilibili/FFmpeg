@@ -100,8 +100,8 @@ do {                                    \
 
 #define atomic_exchange(object, desired)                            \
 ({                                                                  \
-    typeof(object) _obj = (object);                                 \
-    typeof(*object) _old;                                           \
+    __typeof__(object) _obj = (object);                             \
+    __typeof__(*object) _old;                                       \
     do                                                              \
         _old = atomic_load(_obj);                                   \
     while (!__sync_bool_compare_and_swap(_obj, _old, (desired)));   \
@@ -113,8 +113,8 @@ do {                                    \
 
 #define atomic_compare_exchange_strong(object, expected, desired)   \
 ({                                                                  \
-    typeof(object) _exp = (expected);                               \
-    typeof(*object) _old = *_exp;                                   \
+    __typeof__(object) _exp = (expected);                           \
+    __typeof__(*object) _old = *_exp;                               \
     *_exp = __sync_val_compare_and_swap((object), _old, (desired)); \
     *_exp == _old;                                                  \
 })
@@ -147,10 +147,10 @@ do {                                    \
     atomic_fetch_or(object, operand)
 
 #define atomic_fetch_xor(object, operand) \
-    __sync_fetch_and_sub(object, operand)
+    __sync_fetch_and_xor(object, operand)
 
 #define atomic_fetch_xor_explicit(object, operand, order) \
-    atomic_fetch_sub(object, operand)
+    atomic_fetch_xor(object, operand)
 
 #define atomic_fetch_and(object, operand) \
     __sync_fetch_and_and(object, operand)

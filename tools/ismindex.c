@@ -47,8 +47,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "cmdutils.h"
-
 #include "libavformat/avformat.h"
 #include "libavformat/isom.h"
 #include "libavformat/os_support.h"
@@ -792,8 +790,6 @@ int main(int argc, char **argv)
     char output_prefix_buf[2048];
     int split = 0, ismf = 0, i;
     struct Tracks tracks = { 0, .video_track = -1, .audio_track = -1 };
-
-    av_register_all();
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-n")) {

@@ -19,9 +19,16 @@
 #ifndef AVCODEC_NVENC_H
 #define AVCODEC_NVENC_H
 
-#include "compat/nvenc/nvEncodeAPI.h"
-
 #include "config.h"
+
+#if CONFIG_D3D11VA
+#define COBJMACROS
+#include "libavutil/hwcontext_d3d11va.h"
+#else
+typedef void ID3D11Device;
+#endif
+
+#include <ffnvcodec/nvEncodeAPI.h>
 
 #include "compat/cuda/dynlink_loader.h"
 #include "libavutil/fifo.h"
@@ -30,12 +37,22 @@
 #include "avcodec.h"
 
 #define MAX_REGISTERED_FRAMES 64
+#define RC_MODE_DEPRECATED 0x800000
+#define RCD(rc_mode) ((rc_mode) | RC_MODE_DEPRECATED)
+
+#define NVENCAPI_CHECK_VERSION(major, minor) \
+    ((major) < NVENCAPI_MAJOR_VERSION || ((major) == NVENCAPI_MAJOR_VERSION && (minor) <= NVENCAPI_MINOR_VERSION))
+
+// SDK 8.1 compile time feature checks
+#if NVENCAPI_CHECK_VERSION(8, 1)
+#define NVENC_HAVE_BFRAME_REF_MODE
+#define NVENC_HAVE_QP_MAP_MODE
+#endif
 
 typedef struct NvencSurface
 {
     NV_ENC_INPUT_PTR input_surface;
     AVFrame *in_ref;
-    NV_ENC_MAP_INPUT_RESOURCE in_map;
     int reg_idx;
     int width;
     int height;
@@ -44,7 +61,6 @@ typedef struct NvencSurface
     NV_ENC_OUTPUT_PTR output_surface;
     NV_ENC_BUFFER_FORMAT format;
     int size;
-    int lockCount;
 } NvencSurface;
 
 typedef struct NvencDynLoadFunctions
@@ -106,18 +122,24 @@ typedef struct NvencContext
     NV_ENC_CONFIG encode_config;
     CUcontext cu_context;
     CUcontext cu_context_internal;
+    ID3D11Device *d3d11_device;
 
     int nb_surfaces;
     NvencSurface *surfaces;
 
+    AVFifoBuffer *unused_surface_queue;
     AVFifoBuffer *output_surface_queue;
     AVFifoBuffer *output_surface_ready_queue;
     AVFifoBuffer *timestamp_list;
 
+    int encoder_flushing;
+
     struct {
-        CUdeviceptr ptr;
+        void *ptr;
+        int ptr_index;
         NV_ENC_REGISTERED_PTR regptr;
         int mapped;
+        NV_ENC_MAP_INPUT_RESOURCE in_map;
     } registered_frames[MAX_REGISTERED_FRAMES];
     int nb_registered_frames;
 
@@ -152,14 +174,25 @@ typedef struct NvencContext
     int nonref_p;
     int strict_gop;
     int aq_strength;
-    int quality;
+    float quality;
     int aud;
     int bluray_compat;
+    int init_qp_p;
+    int init_qp_b;
+    int init_qp_i;
+    int cqp;
+    int weighted_pred;
+    int coder;
+    int b_ref_mode;
 } NvencContext;
 
 int ff_nvenc_encode_init(AVCodecContext *avctx);
 
 int ff_nvenc_encode_close(AVCodecContext *avctx);
+
+int ff_nvenc_send_frame(AVCodecContext *avctx, const AVFrame *frame);
+
+int ff_nvenc_receive_packet(AVCodecContext *avctx, AVPacket *pkt);
 
 int ff_nvenc_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                           const AVFrame *frame, int *got_packet);

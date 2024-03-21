@@ -144,7 +144,7 @@ static int mp3_write_xing(AVFormatContext *s)
     int ver = 0;
     int bytes_needed;
 
-    if (!s->pb->seekable || !mp3->write_xing)
+    if (!(s->pb->seekable & AVIO_SEEKABLE_NORMAL) || !mp3->write_xing)
         return 0;
 
     for (i = 0; i < FF_ARRAY_ELEMS(avpriv_mpa_freq_tab); i++) {
@@ -319,7 +319,7 @@ static int mp3_write_audio_packet(AVFormatContext *s, AVPacket *pkt)
             if ((mpah.bit_rate == 0) || (mp3->initial_bitrate != mpah.bit_rate))
                 mp3->has_variable_bitrate = 1;
         } else {
-            av_log(s, AV_LOG_WARNING, "Audio packet of size %d (starting with %08X...) "
+            av_log(s, AV_LOG_WARNING, "Audio packet of size %d (starting with %08"PRIX32"...) "
                    "is invalid, writing it anyway.\n", pkt->size, h);
         }
 
@@ -369,20 +369,18 @@ static int mp3_write_audio_packet(AVFormatContext *s, AVPacket *pkt)
 static int mp3_queue_flush(AVFormatContext *s)
 {
     MP3Context *mp3 = s->priv_data;
-    AVPacketList *pktl;
+    AVPacket pkt;
     int ret = 0, write = 1;
 
     ff_id3v2_finish(&mp3->id3, s->pb, s->metadata_header_padding);
     mp3_write_xing(s);
 
-    while ((pktl = mp3->queue)) {
-        if (write && (ret = mp3_write_audio_packet(s, &pktl->pkt)) < 0)
+    while (mp3->queue) {
+        ff_packet_list_get(&mp3->queue, &mp3->queue_end, &pkt);
+        if (write && (ret = mp3_write_audio_packet(s, &pkt)) < 0)
             write = 0;
-        av_packet_unref(&pktl->pkt);
-        mp3->queue = pktl->next;
-        av_freep(&pktl);
+        av_packet_unref(&pkt);
     }
-    mp3->queue_end = NULL;
     return ret;
 }
 
@@ -514,26 +512,14 @@ static int mp3_write_packet(AVFormatContext *s, AVPacket *pkt)
     if (pkt->stream_index == mp3->audio_stream_idx) {
         if (mp3->pics_to_write) {
             /* buffer audio packets until we get all the pictures */
-            AVPacketList *pktl = av_mallocz(sizeof(*pktl));
-            int ret;
-            if (!pktl) {
+            int ret = ff_packet_list_put(&mp3->queue, &mp3->queue_end, pkt, FF_PACKETLIST_FLAG_REF_PACKET);
+
+            if (ret < 0) {
                 av_log(s, AV_LOG_WARNING, "Not enough memory to buffer audio. Skipping picture streams\n");
                 mp3->pics_to_write = 0;
                 mp3_queue_flush(s);
                 return mp3_write_audio_packet(s, pkt);
             }
-
-            ret = av_copy_packet(&pktl->pkt, pkt);
-            if (ret < 0) {
-                av_freep(&pktl);
-                return ret;
-            }
-
-            if (mp3->queue_end)
-                mp3->queue_end->next = pktl;
-            else
-                mp3->queue = pktl;
-            mp3->queue_end = pktl;
         } else
             return mp3_write_audio_packet(s, pkt);
     } else {

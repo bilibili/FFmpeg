@@ -17,6 +17,14 @@ for more formats. None of them are used by default, their use has to be
 explicitly requested by passing the appropriate flags to
 @command{./configure}.
 
+@section Alliance for Open Media libaom
+
+FFmpeg can make use of the libaom library for AV1 decoding.
+
+Go to @url{http://aomedia.org/} and follow the instructions for
+installing the library. Then pass @code{--enable-libaom} to configure to
+enable it.
+
 @section OpenJPEG
 
 FFmpeg can use the OpenJPEG libraries for encoding/decoding J2K videos.  Go to
@@ -85,6 +93,24 @@ Go to @url{http://www.twolame.org/} and follow the
 instructions for installing the library.
 Then pass @code{--enable-libtwolame} to configure to enable it.
 
+@section libcodec2 / codec2 general
+
+FFmpeg can make use of libcodec2 for codec2 encoding and decoding.
+There is currently no native decoder, so libcodec2 must be used for decoding.
+
+Go to @url{http://freedv.org/}, download "Codec 2 source archive".
+Build and install using CMake. Debian users can install the libcodec2-dev package instead.
+Once libcodec2 is installed you can pass @code{--enable-libcodec2} to configure to enable it.
+
+The easiest way to use codec2 is with .c2 files, since they contain the mode information required for decoding.
+To encode such a file, use a .c2 file extension and give the libcodec2 encoder the -mode option:
+@code{ffmpeg -i input.wav -mode 700C output.c2}.
+Playback is as simple as @code{ffplay output.c2}.
+For a list of supported modes, run @code{ffmpeg -h encoder=libcodec2}.
+Raw codec2 files are also supported.
+To make sense of them the mode in use needs to be specified as a format option:
+@code{ffmpeg -f codec2raw -mode 1300 -i input.raw output.wav}.
+
 @section libvpx
 
 FFmpeg can make use of the libvpx library for VP8/VP9 encoding.
@@ -99,6 +125,14 @@ FFmpeg can make use of the libwavpack library for WavPack encoding.
 
 Go to @url{http://www.wavpack.com/} and follow the instructions for
 installing the library. Then pass @code{--enable-libwavpack} to configure to
+enable it.
+
+@section libxavs
+
+FFmpeg can make use of the libxavs library for Xavs encoding.
+
+Go to @url{http://xavs.sf.net/} and follow the instructions for
+installing the library. Then pass @code{--enable-libxavs} to configure to
 enable it.
 
 @section OpenH264
@@ -187,6 +221,19 @@ For Linux and OS X, the supported AviSynth variant is
 @url{https://github.com/avxsynth/avxsynth, AvxSynth}.
 
 @float NOTE
+There is currently a regression in AviSynth+'s @code{capi.h} header as of
+October 2016, which interferes with the ability for builds of FFmpeg to use
+MSVC-built binaries of AviSynth. Until this is resolved, you can make sure
+a known good version is installed by checking out a version from before
+the regression occurred:
+
+@code{git clone -b MT git://github.com/AviSynth/AviSynthPlus.git @*
+cd AviSynthPlus @*
+git checkout -b oldheader b4f292b4dbfad149697fb65c6a037bb3810813f9 @*
+make install PREFIX=/install/prefix}
+@end float
+
+@float NOTE
 AviSynth and AvxSynth are loaded dynamically.  Distributors can build FFmpeg
 with @code{--enable-avisynth}, and the binaries will work regardless of the
 end user having AviSynth or AvxSynth installed - they'll only need to be
@@ -203,6 +250,18 @@ The dispatcher is open source and can be downloaded from
 @url{https://github.com/lu-zero/mfx_dispatch.git}. FFmpeg needs to be configured
 with the @code{--enable-libmfx} option and @code{pkg-config} needs to be able to
 locate the dispatcher's @code{.pc} files.
+
+@section AMD VCE
+
+FFmpeg can use the AMD Advanced Media Framework library for accelerated H.264
+and HEVC encoding on VCE enabled hardware under Windows.
+
+To enable support you must obtain the AMF framework header files from
+@url{https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git}.
+
+Create an @code{AMF/} directory in the system include path.
+Copy the contents of @code{AMF/amf/public/include/} into that directory.
+Then configure FFmpeg with @code{--enable-amf}.
 
 
 @chapter Supported File Formats, Codecs or Features
@@ -269,6 +328,10 @@ library:
 @item BRSTM                     @tab   @tab X
     @tab Audio format used on the Nintendo Wii.
 @item BWF                       @tab X @tab X
+@item codec2 (raw)              @tab X @tab X
+    @tab Must be given -mode format option to decode correctly.
+@item codec2 (.c2 files)        @tab X @tab X
+    @tab Contains header with version and mode info, simplifying playback.
 @item CRI ADX                   @tab X @tab X
     @tab Audio-only format used in console video games.
 @item Discworld II BMV          @tab   @tab X
@@ -320,6 +383,7 @@ library:
 @item FunCom ISS                @tab   @tab X
     @tab Audio format used in various games from FunCom like The Longest Journey.
 @item G.723.1                   @tab X @tab X
+@item G.726                     @tab   @tab X @tab Both left- and right-justified.
 @item G.729 BIT                 @tab X @tab X
 @item G.729 raw                 @tab   @tab X
 @item GENH                      @tab   @tab X
@@ -342,6 +406,8 @@ library:
 @item iLBC                      @tab X @tab X
 @item Interplay MVE             @tab   @tab X
     @tab Format used in various Interplay computer games.
+@item Iterated Systems ClearVideo @tab     @tab  X
+    @tab I-frames only
 @item IV8                       @tab   @tab X
     @tab A format generated by IndigoVision 8000 video server.
 @item IVF (On2)                 @tab X @tab X
@@ -401,6 +467,7 @@ library:
 @item NC camera feed            @tab   @tab X
     @tab NC (AVIP NC4600) camera streams
 @item NIST SPeech HEader REsources @tab   @tab X
+@item Computerized Speech Lab NSP @tab   @tab X
 @item NTT TwinVQ (VQF)          @tab   @tab X
     @tab Nippon Telegraph and Telephone Corporation TwinVQ.
 @item Nullsoft Streaming Video  @tab   @tab X
@@ -415,6 +482,10 @@ library:
 @item QCP                       @tab   @tab X
 @item raw ADTS (AAC)            @tab X @tab X
 @item raw AC-3                  @tab X @tab X
+@item raw AMR-NB                @tab   @tab X
+@item raw AMR-WB                @tab   @tab X
+@item raw aptX                  @tab X @tab X
+@item raw aptX HD               @tab X @tab X
 @item raw Chinese AVS video     @tab X @tab X
 @item raw CRI ADX               @tab X @tab X
 @item raw Dirac                 @tab X @tab X
@@ -438,6 +509,7 @@ library:
 @item raw NULL                  @tab X @tab
 @item raw video                 @tab X @tab X
 @item raw id RoQ                @tab X @tab
+@item raw SBC                   @tab X @tab X
 @item raw Shorten               @tab   @tab X
 @item raw TAK                   @tab   @tab X
 @item raw TrueHD                @tab X @tab X
@@ -487,7 +559,7 @@ library:
 @item SAP                       @tab X @tab X
 @item SBG                       @tab   @tab X
 @item SDP                       @tab   @tab X
-@item Sega FILM/CPK             @tab   @tab X
+@item Sega FILM/CPK             @tab X @tab X
     @tab Used in many Sega Saturn console games.
 @item Silicon Graphics Movie    @tab   @tab X
 @item Sierra SOL                @tab   @tab X
@@ -498,6 +570,7 @@ library:
     @tab Multimedia format used by many games.
 @item SMJPEG                    @tab X @tab X
     @tab Used in certain Loki game ports.
+@item SMPTE 337M encapsulation  @tab   @tab X
 @item Smush                     @tab   @tab X
     @tab Multimedia format used in some LucasArts games.
 @item Sony OpenMG (OMA)         @tab X @tab X
@@ -506,7 +579,7 @@ library:
 @item Sony Wave64 (W64)         @tab X @tab X
 @item SoX native format         @tab X @tab X
 @item SUN AU format             @tab X @tab X
-@item SUP raw PGS subtitles     @tab   @tab X
+@item SUP raw PGS subtitles     @tab X @tab X
 @item SVAG                      @tab   @tab X
     @tab Audio format used in Konami PS2 games.
 @item TDSC                      @tab   @tab X
@@ -569,6 +642,8 @@ following image formats are supported:
     @tab Digital Picture Exchange
 @item EXR          @tab   @tab X
     @tab OpenEXR
+@item FITS         @tab X @tab X
+    @tab Flexible Image Transport System
 @item JPEG         @tab X @tab X
     @tab Progressive JPEG is not supported.
 @item JPEG 2000    @tab X @tab X
@@ -608,6 +683,8 @@ following image formats are supported:
     @tab X BitMap image format
 @item XFace @tab X @tab X
     @tab X-Face image format
+@item XPM  @tab   @tab X
+    @tab X PixMap image format
 @item XWD  @tab X @tab X
     @tab X Window Dump image format
 @end multitable
@@ -650,6 +727,8 @@ following image formats are supported:
 @item Autodesk Animator Flic video  @tab     @tab  X
 @item Autodesk RLE           @tab     @tab  X
     @tab fourcc: AASC
+@item AV1                    @tab     @tab  E
+    @tab Supported through external library libaom
 @item Avid 1:1 10-bit RGB Packer  @tab  X  @tab  X
     @tab fourcc: AVrp
 @item AVS (Audio Video Standard) video  @tab     @tab  X
@@ -687,7 +766,7 @@ following image formats are supported:
 @item DFA                    @tab     @tab  X
     @tab Codec used in Chronomaster game.
 @item Dirac                  @tab  E  @tab  X
-    @tab supported through external library libschroedinger
+    @tab supported though the native vc2 (Dirac Pro) encoder
 @item Deluxe Paint Animation @tab     @tab  X
 @item DNxHD                  @tab   X @tab  X
     @tab aka SMPTE VC3
@@ -764,7 +843,8 @@ following image formats are supported:
 @item LucasArts SANM/Smush   @tab     @tab  X
     @tab Used in LucasArts games / SMUSH animations.
 @item lossless MJPEG         @tab  X  @tab  X
-@item MagicYUV Video         @tab     @tab  X
+@item MagicYUV Video         @tab  X  @tab  X
+@item Mandsoft Screen Capture Codec  @tab     @tab  X
 @item Microsoft ATC Screen   @tab     @tab  X
     @tab Also known as Microsoft Screen 3.
 @item Microsoft Expression Encoder Screen  @tab     @tab  X
@@ -832,6 +912,7 @@ following image formats are supported:
     @tab used in some games by Entertainment Software Partners
 @item ScreenPressor          @tab     @tab  X
 @item Screenpresso           @tab     @tab  X
+@item Screen Recorder Gold Codec  @tab     @tab  X
 @item Sierra VMD video       @tab     @tab  X
     @tab Used in Sierra VMD files.
 @item Silicon Graphics Motion Video Compressor 1 (MVC1)  @tab     @tab  X
@@ -960,6 +1041,10 @@ following image formats are supported:
 @item Amazing Studio PAF Audio @tab     @tab  X
 @item Apple lossless audio   @tab  X  @tab  X
     @tab QuickTime fourcc 'alac'
+@item aptX                   @tab  X  @tab  X
+    @tab Used in Bluetooth A2DP
+@item aptX HD                @tab  X  @tab  X
+    @tab Used in Bluetooth A2DP
 @item ATRAC1                 @tab     @tab  X
 @item ATRAC3                 @tab     @tab  X
 @item ATRAC3+                @tab     @tab  X
@@ -967,6 +1052,8 @@ following image formats are supported:
     @tab Used in Bink and Smacker files in many games.
 @item CELT                   @tab     @tab  E
     @tab decoding supported through external library libcelt
+@item codec2                 @tab  E  @tab  E
+    @tab en/decoding supported through external library libcodec2
 @item Delphine Software International CIN audio  @tab     @tab  X
     @tab Codec used in Delphine Software International games.
 @item Digital Speech Standard - Standard Play mode (DSS SP) @tab     @tab  X
@@ -975,6 +1062,7 @@ following image formats are supported:
     @tab All versions except 5.1 are supported.
 @item DCA (DTS Coherent Acoustics)  @tab  X  @tab  X
     @tab supported extensions: XCh, XXCH, X96, XBR, XLL, LBR (partially)
+@item Dolby E  @tab     @tab  X
 @item DPCM id RoQ            @tab  X  @tab  X
     @tab Used in Quake III, Jedi Knight 2 and other computer games.
 @item DPCM Interplay         @tab     @tab  X
@@ -1064,6 +1152,8 @@ following image formats are supported:
     @tab Real low bitrate AC-3 codec
 @item RealAudio Lossless     @tab     @tab  X
 @item RealAudio SIPR / ACELP.NET @tab     @tab  X
+@item SBC (low-complexity subband codec) @tab  X  @tab  X
+    @tab Used in Bluetooth A2DP
 @item Shorten                @tab     @tab  X
 @item Sierra VMD audio       @tab     @tab  X
     @tab Used in Sierra VMD files.
