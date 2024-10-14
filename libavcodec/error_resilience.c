@@ -27,7 +27,6 @@
 
 #include <limits.h>
 
-#include "libavutil/atomic.h"
 #include "libavutil/internal.h"
 #include "avcodec.h"
 #include "error_resilience.h"
@@ -42,7 +41,7 @@
  * @param stride the number of MVs to get to the next row
  * @param mv_step the number of MVs per row or column in a macroblock
  */
-static void set_mv_strides(ERContext *s, int *mv_step, int *stride)
+static void set_mv_strides(ERContext *s, ptrdiff_t *mv_step, ptrdiff_t *stride)
 {
     if (s->avctx->codec_id == AV_CODEC_ID_H264) {
         av_assert0(s->quarter_sample);
@@ -95,7 +94,7 @@ static void put_dc(ERContext *s, uint8_t *dest_y, uint8_t *dest_cb,
     }
 }
 
-static void filter181(int16_t *data, int width, int height, int stride)
+static void filter181(int16_t *data, int width, int height, ptrdiff_t stride)
 {
     int x, y;
 
@@ -137,7 +136,7 @@ static void filter181(int16_t *data, int width, int height, int stride)
  * @param h     height in 8 pixel blocks
  */
 static void guess_dc(ERContext *s, int16_t *dc, int w,
-                     int h, int stride, int is_luma)
+                     int h, ptrdiff_t stride, int is_luma)
 {
     int b_x, b_y;
     int16_t  (*col )[4] = av_malloc_array(stride, h*sizeof( int16_t)*4);
@@ -240,9 +239,10 @@ fail:
  * @param h     height in 8 pixel blocks
  */
 static void h_block_filter(ERContext *s, uint8_t *dst, int w,
-                           int h, int stride, int is_luma)
+                           int h, ptrdiff_t stride, int is_luma)
 {
-    int b_x, b_y, mvx_stride, mvy_stride;
+    int b_x, b_y;
+    ptrdiff_t mvx_stride, mvy_stride;
     const uint8_t *cm = ff_crop_tab + MAX_NEG_CROP;
     set_mv_strides(s, &mvx_stride, &mvy_stride);
     mvx_stride >>= is_luma;
@@ -308,9 +308,10 @@ static void h_block_filter(ERContext *s, uint8_t *dst, int w,
  * @param h     height in 8 pixel blocks
  */
 static void v_block_filter(ERContext *s, uint8_t *dst, int w, int h,
-                           int stride, int is_luma)
+                           ptrdiff_t stride, int is_luma)
 {
-    int b_x, b_y, mvx_stride, mvy_stride;
+    int b_x, b_y;
+    ptrdiff_t mvx_stride, mvy_stride;
     const uint8_t *cm = ff_crop_tab + MAX_NEG_CROP;
     set_mv_strides(s, &mvx_stride, &mvy_stride);
     mvx_stride >>= is_luma;
@@ -390,11 +391,12 @@ static void guess_mv(ERContext *s)
 {
     int (*blocklist)[2], (*next_blocklist)[2];
     uint8_t *fixed;
-    const int mb_stride = s->mb_stride;
+    const ptrdiff_t mb_stride = s->mb_stride;
     const int mb_width  = s->mb_width;
     int mb_height = s->mb_height;
     int i, depth, num_avail;
-    int mb_x, mb_y, mot_step, mot_stride;
+    int mb_x, mb_y;
+    ptrdiff_t mot_step, mot_stride;
     int blocklist_length, next_blocklist_length;
 
     if (s->last_pic.f && s->last_pic.f->data[0])
@@ -804,18 +806,16 @@ void ff_er_frame_start(ERContext *s)
 
     memset(s->error_status_table, ER_MB_ERROR | VP_START | ER_MB_END,
            s->mb_stride * s->mb_height * sizeof(uint8_t));
-    s->error_count    = 3 * s->mb_num;
+    atomic_init(&s->error_count, 3 * s->mb_num);
     s->error_occurred = 0;
 }
 
 static int er_supported(ERContext *s)
 {
     if(s->avctx->hwaccel && s->avctx->hwaccel->decode_slice           ||
-#if FF_API_CAP_VDPAU
-       s->avctx->codec->capabilities&AV_CODEC_CAP_HWACCEL_VDPAU          ||
-#endif
        !s->cur_pic.f                                                  ||
-       s->cur_pic.field_picture
+       s->cur_pic.field_picture                                       ||
+       s->avctx->profile == FF_PROFILE_MPEG4_SIMPLE_STUDIO
     )
         return 0;
     return 1;
@@ -852,20 +852,20 @@ void ff_er_add_slice(ERContext *s, int startx, int starty,
     mask &= ~VP_START;
     if (status & (ER_AC_ERROR | ER_AC_END)) {
         mask           &= ~(ER_AC_ERROR | ER_AC_END);
-        avpriv_atomic_int_add_and_fetch(&s->error_count, start_i - end_i - 1);
+        atomic_fetch_add(&s->error_count, start_i - end_i - 1);
     }
     if (status & (ER_DC_ERROR | ER_DC_END)) {
         mask           &= ~(ER_DC_ERROR | ER_DC_END);
-        avpriv_atomic_int_add_and_fetch(&s->error_count, start_i - end_i - 1);
+        atomic_fetch_add(&s->error_count, start_i - end_i - 1);
     }
     if (status & (ER_MV_ERROR | ER_MV_END)) {
         mask           &= ~(ER_MV_ERROR | ER_MV_END);
-        avpriv_atomic_int_add_and_fetch(&s->error_count, start_i - end_i - 1);
+        atomic_fetch_add(&s->error_count, start_i - end_i - 1);
     }
 
     if (status & ER_MB_ERROR) {
         s->error_occurred = 1;
-        avpriv_atomic_int_set(&s->error_count, INT_MAX);
+        atomic_store(&s->error_count, INT_MAX);
     }
 
     if (mask == ~0x7F) {
@@ -878,7 +878,7 @@ void ff_er_add_slice(ERContext *s, int startx, int starty,
     }
 
     if (end_i == s->mb_num)
-        avpriv_atomic_int_set(&s->error_count, INT_MAX);
+        atomic_store(&s->error_count, INT_MAX);
     else {
         s->error_status_table[end_xy] &= mask;
         s->error_status_table[end_xy] |= status;
@@ -893,7 +893,7 @@ void ff_er_add_slice(ERContext *s, int startx, int starty,
         prev_status &= ~ VP_START;
         if (prev_status != (ER_MV_END | ER_DC_END | ER_AC_END)) {
             s->error_occurred = 1;
-            avpriv_atomic_int_set(&s->error_count, INT_MAX);
+            atomic_store(&s->error_count, INT_MAX);
         }
     }
 }
@@ -910,10 +910,10 @@ void ff_er_frame_end(ERContext *s)
 
     /* We do not support ER of field pictures yet,
      * though it should not crash if enabled. */
-    if (!s->avctx->error_concealment || s->error_count == 0            ||
+    if (!s->avctx->error_concealment || !atomic_load(&s->error_count)  ||
         s->avctx->lowres                                               ||
         !er_supported(s)                                               ||
-        s->error_count == 3 * s->mb_width *
+        atomic_load(&s->error_count) == 3 * s->mb_width *
                           (s->avctx->skip_top + s->avctx->skip_bottom)) {
         return;
     }
@@ -927,7 +927,7 @@ void ff_er_frame_end(ERContext *s)
     if (   mb_x == s->mb_width
         && s->avctx->codec_id == AV_CODEC_ID_MPEG2VIDEO
         && (FFALIGN(s->avctx->height, 16)&16)
-        && s->error_count == 3 * s->mb_width * (s->avctx->skip_top + s->avctx->skip_bottom + 1)
+        && atomic_load(&s->error_count) == 3 * s->mb_width * (s->avctx->skip_top + s->avctx->skip_bottom + 1)
     ) {
         av_log(s->avctx, AV_LOG_DEBUG, "ignoring last missing slice\n");
         return;

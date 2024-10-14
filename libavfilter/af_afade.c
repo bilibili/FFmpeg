@@ -23,29 +23,34 @@
  * fade audio filter
  */
 
+#define FF_INTERNAL_FIELDS 1
+#include "framequeue.h"
+
 #include "libavutil/audio_fifo.h"
 #include "libavutil/opt.h"
 #include "audio.h"
 #include "avfilter.h"
+#include "filters.h"
 #include "internal.h"
 
-typedef struct {
+typedef struct AudioFadeContext {
     const AVClass *class;
     int type;
     int curve, curve2;
-    int nb_samples;
+    int64_t nb_samples;
     int64_t start_sample;
     int64_t duration;
     int64_t start_time;
     int overlap;
     int cf0_eof;
+    int prev_size;
     int crossfade_is_over;
     AVAudioFifo *fifo[2];
     int64_t pts;
 
     void (*fade_samples)(uint8_t **dst, uint8_t * const *src,
                          int nb_samples, int channels, int direction,
-                         int64_t start, int range, int curve);
+                         int64_t start, int64_t range, int curve);
     void (*crossfade_samples)(uint8_t **dst, uint8_t * const *cf0,
                               uint8_t * const *cf1,
                               int nb_samples, int channels,
@@ -90,7 +95,7 @@ static int query_formats(AVFilterContext *ctx)
     return ff_set_common_samplerates(ctx, formats);
 }
 
-static double fade_gain(int curve, int64_t index, int range)
+static double fade_gain(int curve, int64_t index, int64_t range)
 {
 #define CUBE(a) ((a)*(a)*(a))
     double gain;
@@ -154,7 +159,7 @@ static double fade_gain(int curve, int64_t index, int range)
 #define FADE_PLANAR(name, type)                                             \
 static void fade_samples_## name ##p(uint8_t **dst, uint8_t * const *src,   \
                                      int nb_samples, int channels, int dir, \
-                                     int64_t start, int range, int curve)   \
+                                     int64_t start, int64_t range, int curve) \
 {                                                                           \
     int i, c;                                                               \
                                                                             \
@@ -172,7 +177,7 @@ static void fade_samples_## name ##p(uint8_t **dst, uint8_t * const *src,   \
 #define FADE(name, type)                                                    \
 static void fade_samples_## name (uint8_t **dst, uint8_t * const *src,      \
                                   int nb_samples, int channels, int dir,    \
-                                  int64_t start, int range, int curve)      \
+                                  int64_t start, int64_t range, int curve)  \
 {                                                                           \
     type *d = (type *)dst[0];                                               \
     const type *s = (type *)src[0];                                         \
@@ -228,10 +233,10 @@ static const AVOption afade_options[] = {
     { "out",          "fade-out",                                    0,                    AV_OPT_TYPE_CONST,  {.i64 = 1    }, 0, 0, FLAGS, "type" },
     { "start_sample", "set number of first sample to start fading",  OFFSET(start_sample), AV_OPT_TYPE_INT64,  {.i64 = 0    }, 0, INT64_MAX, FLAGS },
     { "ss",           "set number of first sample to start fading",  OFFSET(start_sample), AV_OPT_TYPE_INT64,  {.i64 = 0    }, 0, INT64_MAX, FLAGS },
-    { "nb_samples",   "set number of samples for fade duration",     OFFSET(nb_samples),   AV_OPT_TYPE_INT,    {.i64 = 44100}, 1, INT32_MAX, FLAGS },
-    { "ns",           "set number of samples for fade duration",     OFFSET(nb_samples),   AV_OPT_TYPE_INT,    {.i64 = 44100}, 1, INT32_MAX, FLAGS },
-    { "start_time",   "set time to start fading",                    OFFSET(start_time),   AV_OPT_TYPE_DURATION, {.i64 = 0. }, 0, INT32_MAX, FLAGS },
-    { "st",           "set time to start fading",                    OFFSET(start_time),   AV_OPT_TYPE_DURATION, {.i64 = 0. }, 0, INT32_MAX, FLAGS },
+    { "nb_samples",   "set number of samples for fade duration",     OFFSET(nb_samples),   AV_OPT_TYPE_INT64,  {.i64 = 44100}, 1, INT64_MAX, FLAGS },
+    { "ns",           "set number of samples for fade duration",     OFFSET(nb_samples),   AV_OPT_TYPE_INT64,  {.i64 = 44100}, 1, INT64_MAX, FLAGS },
+    { "start_time",   "set time to start fading",                    OFFSET(start_time),   AV_OPT_TYPE_DURATION, {.i64 = 0. }, 0, INT64_MAX, FLAGS },
+    { "st",           "set time to start fading",                    OFFSET(start_time),   AV_OPT_TYPE_DURATION, {.i64 = 0. }, 0, INT64_MAX, FLAGS },
     { "duration",     "set fade duration",                           OFFSET(duration),     AV_OPT_TYPE_DURATION, {.i64 = 0. }, 0, INT32_MAX, FLAGS },
     { "d",            "set fade duration",                           OFFSET(duration),     AV_OPT_TYPE_DURATION, {.i64 = 0. }, 0, INT32_MAX, FLAGS },
     { "curve",        "set fade curve type",                         OFFSET(curve),        AV_OPT_TYPE_INT,    {.i64 = TRI  }, 0, NB_CURVES - 1, FLAGS, "curve" },
@@ -282,7 +287,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *buf)
     if (av_frame_is_writable(buf)) {
         out_buf = buf;
     } else {
-        out_buf = ff_get_audio_buffer(inlink, nb_samples);
+        out_buf = ff_get_audio_buffer(outlink, nb_samples);
         if (!out_buf)
             return AVERROR(ENOMEM);
         av_frame_copy_props(out_buf, buf);
@@ -291,7 +296,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *buf)
     if ((!s->type && (cur_sample + nb_samples < s->start_sample)) ||
         ( s->type && (s->start_sample + s->nb_samples < cur_sample))) {
         av_samples_set_silence(out_buf->extended_data, 0, nb_samples,
-                               av_frame_get_channels(out_buf), out_buf->format);
+                               out_buf->channels, out_buf->format);
     } else {
         int64_t start;
 
@@ -301,7 +306,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *buf)
             start = s->start_sample + s->nb_samples - cur_sample;
 
         s->fade_samples(out_buf->extended_data, buf->extended_data,
-                        nb_samples, av_frame_get_channels(buf),
+                        nb_samples, buf->channels,
                         s->type ? -1 : 1, start,
                         s->nb_samples, s->curve);
     }
@@ -428,157 +433,127 @@ CROSSFADE(flt, float)
 CROSSFADE(s16, int16_t)
 CROSSFADE(s32, int32_t)
 
-static int acrossfade_filter_frame(AVFilterLink *inlink, AVFrame *in)
+static int activate(AVFilterContext *ctx)
 {
-    AVFilterContext *ctx  = inlink->dst;
     AudioFadeContext *s   = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
-    AVFrame *out, *cf[2] = { NULL };
-    int ret = 0, nb_samples;
+    AVFrame *in = NULL, *out, *cf[2] = { NULL };
+    int ret = 0, nb_samples, status;
+    int64_t pts;
 
     if (s->crossfade_is_over) {
+        ret = ff_inlink_consume_frame(ctx->inputs[1], &in);
+        if (ret < 0) {
+            return ret;
+        } else if (ff_inlink_acknowledge_status(ctx->inputs[1], &status, &pts)) {
+            ff_outlink_set_status(ctx->outputs[0], status, pts);
+            return 0;
+        } else {
+            if (ff_outlink_frame_wanted(ctx->outputs[0]) && !in) {
+                ff_inlink_request_frame(ctx->inputs[1]);
+                return 0;
+            }
+        }
         in->pts = s->pts;
         s->pts += av_rescale_q(in->nb_samples,
             (AVRational){ 1, outlink->sample_rate }, outlink->time_base);
         return ff_filter_frame(outlink, in);
-    } else if (inlink == ctx->inputs[0]) {
-        av_audio_fifo_write(s->fifo[0], (void **)in->extended_data, in->nb_samples);
+    }
 
-        nb_samples = av_audio_fifo_size(s->fifo[0]) - s->nb_samples;
+    if (ff_framequeue_queued_samples(&ctx->inputs[0]->fifo) > s->nb_samples) {
+        nb_samples = ff_framequeue_queued_samples(&ctx->inputs[0]->fifo) - s->nb_samples;
         if (nb_samples > 0) {
-            out = ff_get_audio_buffer(outlink, nb_samples);
-            if (!out) {
-                ret = AVERROR(ENOMEM);
-                goto fail;
+            ret = ff_inlink_consume_samples(ctx->inputs[0], nb_samples, nb_samples, &in);
+            if (ret < 0) {
+                return ret;
             }
-            av_audio_fifo_read(s->fifo[0], (void **)out->extended_data, nb_samples);
-            out->pts = s->pts;
-            s->pts += av_rescale_q(nb_samples,
-                (AVRational){ 1, outlink->sample_rate }, outlink->time_base);
-            ret = ff_filter_frame(outlink, out);
         }
-    } else if (av_audio_fifo_size(s->fifo[1]) < s->nb_samples) {
-        if (!s->overlap && av_audio_fifo_size(s->fifo[0]) > 0) {
-            nb_samples = av_audio_fifo_size(s->fifo[0]);
-
-            cf[0] = ff_get_audio_buffer(outlink, nb_samples);
-            out = ff_get_audio_buffer(outlink, nb_samples);
-            if (!out || !cf[0]) {
-                ret = AVERROR(ENOMEM);
-                goto fail;
-            }
-            av_audio_fifo_read(s->fifo[0], (void **)cf[0]->extended_data, nb_samples);
-
-            s->fade_samples(out->extended_data, cf[0]->extended_data, nb_samples,
-                            outlink->channels, -1, nb_samples - 1, nb_samples, s->curve);
-            out->pts = s->pts;
-            s->pts += av_rescale_q(nb_samples,
-                (AVRational){ 1, outlink->sample_rate }, outlink->time_base);
-            ret = ff_filter_frame(outlink, out);
-            if (ret < 0)
-                goto fail;
-        }
-
-        av_audio_fifo_write(s->fifo[1], (void **)in->extended_data, in->nb_samples);
-    } else if (av_audio_fifo_size(s->fifo[1]) >= s->nb_samples) {
-        av_audio_fifo_write(s->fifo[1], (void **)in->extended_data, in->nb_samples);
-
+        in->pts = s->pts;
+        s->pts += av_rescale_q(in->nb_samples,
+            (AVRational){ 1, outlink->sample_rate }, outlink->time_base);
+        return ff_filter_frame(outlink, in);
+    } else if (ff_framequeue_queued_samples(&ctx->inputs[1]->fifo) >= s->nb_samples) {
         if (s->overlap) {
-            cf[0] = ff_get_audio_buffer(outlink, s->nb_samples);
-            cf[1] = ff_get_audio_buffer(outlink, s->nb_samples);
             out = ff_get_audio_buffer(outlink, s->nb_samples);
-            if (!out || !cf[0] || !cf[1]) {
+            if (!out)
+                return AVERROR(ENOMEM);
+
+            ret = ff_inlink_consume_samples(ctx->inputs[0], s->nb_samples, s->nb_samples, &cf[0]);
+            if (ret < 0) {
                 av_frame_free(&out);
-                ret = AVERROR(ENOMEM);
-                goto fail;
+                return ret;
             }
 
-            av_audio_fifo_read(s->fifo[0], (void **)cf[0]->extended_data, s->nb_samples);
-            av_audio_fifo_read(s->fifo[1], (void **)cf[1]->extended_data, s->nb_samples);
+            ret = ff_inlink_consume_samples(ctx->inputs[1], s->nb_samples, s->nb_samples, &cf[1]);
+            if (ret < 0) {
+                av_frame_free(&out);
+                return ret;
+            }
 
             s->crossfade_samples(out->extended_data, cf[0]->extended_data,
                                  cf[1]->extended_data,
-                                 s->nb_samples, av_frame_get_channels(in),
+                                 s->nb_samples, out->channels,
                                  s->curve, s->curve2);
             out->pts = s->pts;
             s->pts += av_rescale_q(s->nb_samples,
                 (AVRational){ 1, outlink->sample_rate }, outlink->time_base);
-            ret = ff_filter_frame(outlink, out);
-            if (ret < 0)
-                goto fail;
+            s->crossfade_is_over = 1;
+            av_frame_free(&cf[0]);
+            av_frame_free(&cf[1]);
+            return ff_filter_frame(outlink, out);
         } else {
             out = ff_get_audio_buffer(outlink, s->nb_samples);
-            cf[1] = ff_get_audio_buffer(outlink, s->nb_samples);
-            if (!out || !cf[1]) {
-                ret = AVERROR(ENOMEM);
+            if (!out)
+                return AVERROR(ENOMEM);
+
+            ret = ff_inlink_consume_samples(ctx->inputs[0], s->nb_samples, s->nb_samples, &cf[0]);
+            if (ret < 0) {
                 av_frame_free(&out);
-                goto fail;
+                return ret;
             }
 
-            av_audio_fifo_read(s->fifo[1], (void **)cf[1]->extended_data, s->nb_samples);
+            s->fade_samples(out->extended_data, cf[0]->extended_data, s->nb_samples,
+                            outlink->channels, -1, s->nb_samples - 1, s->nb_samples, s->curve);
+            out->pts = s->pts;
+            s->pts += av_rescale_q(s->nb_samples,
+                (AVRational){ 1, outlink->sample_rate }, outlink->time_base);
+            av_frame_free(&cf[0]);
+            ret = ff_filter_frame(outlink, out);
+            if (ret < 0)
+                return ret;
+
+            out = ff_get_audio_buffer(outlink, s->nb_samples);
+            if (!out)
+                return AVERROR(ENOMEM);
+
+            ret = ff_inlink_consume_samples(ctx->inputs[1], s->nb_samples, s->nb_samples, &cf[1]);
+            if (ret < 0) {
+                av_frame_free(&out);
+                return ret;
+            }
 
             s->fade_samples(out->extended_data, cf[1]->extended_data, s->nb_samples,
                             outlink->channels, 1, 0, s->nb_samples, s->curve2);
             out->pts = s->pts;
             s->pts += av_rescale_q(s->nb_samples,
                 (AVRational){ 1, outlink->sample_rate }, outlink->time_base);
-            ret = ff_filter_frame(outlink, out);
-            if (ret < 0)
-                goto fail;
+            s->crossfade_is_over = 1;
+            av_frame_free(&cf[1]);
+            return ff_filter_frame(outlink, out);
         }
-
-        nb_samples = av_audio_fifo_size(s->fifo[1]);
-        if (nb_samples > 0) {
-            out = ff_get_audio_buffer(outlink, nb_samples);
-            if (!out) {
-                ret = AVERROR(ENOMEM);
-                goto fail;
-            }
-
-            av_audio_fifo_read(s->fifo[1], (void **)out->extended_data, nb_samples);
-            out->pts = s->pts;
-            s->pts += av_rescale_q(nb_samples,
-                (AVRational){ 1, outlink->sample_rate }, outlink->time_base);
-            ret = ff_filter_frame(outlink, out);
-        }
-        s->crossfade_is_over = 1;
-    }
-
-fail:
-    av_frame_free(&in);
-    av_frame_free(&cf[0]);
-    av_frame_free(&cf[1]);
-    return ret;
-}
-
-static int acrossfade_request_frame(AVFilterLink *outlink)
-{
-    AVFilterContext *ctx = outlink->src;
-    AudioFadeContext *s = ctx->priv;
-    int ret = 0;
-
-    if (!s->cf0_eof) {
-        AVFilterLink *cf0 = ctx->inputs[0];
-        ret = ff_request_frame(cf0);
-        if (ret < 0 && ret != AVERROR_EOF)
-            return ret;
-        if (ret == AVERROR_EOF) {
+    } else if (ff_outlink_frame_wanted(ctx->outputs[0])) {
+        if (!s->cf0_eof && ctx->inputs[0]->status_in) {
             s->cf0_eof = 1;
-            ret = 0;
         }
-    } else {
-        AVFilterLink *cf1 = ctx->inputs[1];
-        int nb_samples = av_audio_fifo_size(s->fifo[1]);
-
-        ret = ff_request_frame(cf1);
-        if (ret == AVERROR_EOF && nb_samples > 0) {
-            AVFrame *out = ff_get_audio_buffer(outlink, nb_samples);
-            if (!out)
-                return AVERROR(ENOMEM);
-
-            av_audio_fifo_read(s->fifo[1], (void **)out->extended_data, nb_samples);
-            ret = ff_filter_frame(outlink, out);
+        if (ctx->inputs[1]->status_in) {
+            ff_outlink_set_status(ctx->outputs[0], AVERROR_EOF, AV_NOPTS_VALUE);
+            return 0;
         }
+        if (!s->cf0_eof)
+            ff_inlink_request_frame(ctx->inputs[0]);
+        else
+            ff_inlink_request_frame(ctx->inputs[1]);
+        return 0;
     }
 
     return ret;
@@ -615,32 +590,17 @@ static int acrossfade_config_output(AVFilterLink *outlink)
 
     config_output(outlink);
 
-    s->fifo[0] = av_audio_fifo_alloc(outlink->format, outlink->channels, s->nb_samples);
-    s->fifo[1] = av_audio_fifo_alloc(outlink->format, outlink->channels, s->nb_samples);
-    if (!s->fifo[0] || !s->fifo[1])
-        return AVERROR(ENOMEM);
-
     return 0;
-}
-
-static av_cold void uninit(AVFilterContext *ctx)
-{
-    AudioFadeContext *s = ctx->priv;
-
-    av_audio_fifo_free(s->fifo[0]);
-    av_audio_fifo_free(s->fifo[1]);
 }
 
 static const AVFilterPad avfilter_af_acrossfade_inputs[] = {
     {
         .name         = "crossfade0",
         .type         = AVMEDIA_TYPE_AUDIO,
-        .filter_frame = acrossfade_filter_frame,
     },
     {
         .name         = "crossfade1",
         .type         = AVMEDIA_TYPE_AUDIO,
-        .filter_frame = acrossfade_filter_frame,
     },
     { NULL }
 };
@@ -649,7 +609,6 @@ static const AVFilterPad avfilter_af_acrossfade_outputs[] = {
     {
         .name          = "default",
         .type          = AVMEDIA_TYPE_AUDIO,
-        .request_frame = acrossfade_request_frame,
         .config_props  = acrossfade_config_output,
     },
     { NULL }
@@ -660,7 +619,7 @@ AVFilter ff_af_acrossfade = {
     .description   = NULL_IF_CONFIG_SMALL("Cross fade two input audio streams."),
     .query_formats = query_formats,
     .priv_size     = sizeof(AudioFadeContext),
-    .uninit        = uninit,
+    .activate      = activate,
     .priv_class    = &acrossfade_class,
     .inputs        = avfilter_af_acrossfade_inputs,
     .outputs       = avfilter_af_acrossfade_outputs,

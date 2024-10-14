@@ -132,7 +132,7 @@ static int video_decode_example(const char *input_filename)
                     return number_of_written_bytes;
                 }
                 printf("%d, %10"PRId64", %10"PRId64", %8"PRId64", %8d, 0x%08lx\n", video_stream,
-                        fr->pts, fr->pkt_dts, av_frame_get_pkt_duration(fr),
+                        fr->pts, fr->pkt_dts, fr->pkt_duration,
                         number_of_written_bytes, av_adler32_update(0, (const uint8_t*)byte_buffer, number_of_written_bytes));
             }
             av_packet_unref(&pkt);
@@ -157,8 +157,6 @@ int main(int argc, char **argv)
         av_log(NULL, AV_LOG_ERROR, "Incorrect input\n");
         return 1;
     }
-
-    av_register_all();
 
     if (video_decode_example(argv[1]) != 0)
         return 1;

@@ -112,6 +112,8 @@ static int file_read(URLContext *h, unsigned char *buf, int size)
     ret = read(c->fd, buf, size);
     if (ret == 0 && c->follow)
         return AVERROR(EAGAIN);
+    if (ret == 0)
+        return AVERROR_EOF;
     return (ret == -1) ? AVERROR(errno) : ret;
 }
 
@@ -226,6 +228,11 @@ static int file_open(URLContext *h, const char *filename, int flags)
     c->fd = fd;
 
     h->is_streamed = !fstat(fd, &st) && S_ISFIFO(st.st_mode);
+
+    /* Buffer writes more than the default 32k to improve throughput especially
+     * with networked file systems */
+    if (!h->is_streamed && flags & AVIO_FLAG_WRITE)
+        h->min_packet_size = h->max_packet_size = 262144;
 
     return 0;
 }
@@ -379,7 +386,7 @@ static int pipe_open(URLContext *h, const char *filename, int flags)
     setmode(fd, O_BINARY);
 #endif
     c->fd = fd;
-    h->is_streamed = 1;
+    h->is_streamed = 0;
     return 0;
 }
 
@@ -388,6 +395,7 @@ const URLProtocol ff_pipe_protocol = {
     .url_open            = pipe_open,
     .url_read            = file_read,
     .url_write           = file_write,
+    .url_seek            = file_seek,
     .url_get_file_handle = file_get_handle,
     .url_check           = file_check,
     .priv_data_size      = sizeof(FileContext),

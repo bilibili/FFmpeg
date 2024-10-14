@@ -128,8 +128,7 @@ static inline void silk_stabilize_lsf(int16_t nlsf[16], int order, const uint16_
     if (nlsf[0] < min_delta[0])
         nlsf[0] = min_delta[0];
     for (i = 1; i < order; i++)
-        if (nlsf[i] < nlsf[i - 1] + min_delta[i])
-            nlsf[i] = nlsf[i - 1] + min_delta[i];
+        nlsf[i] = FFMAX(nlsf[i], FFMIN(nlsf[i - 1] + min_delta[i], 32767));
 
     /* push backwards to increase distance */
     if (nlsf[order-1] > 32768 - min_delta[order])
@@ -186,8 +185,15 @@ static inline int silk_is_lpc_stable(const int16_t lpc[16], int order)
         row = lpc32[k & 1];
 
         for (j = 0; j < k; j++) {
-            int x = prevrow[j] - ROUND_MULL(prevrow[k - j - 1], rc, 31);
-            row[j] = ROUND_MULL(x, gain, fbits);
+            int x = av_sat_sub32(prevrow[j], ROUND_MULL(prevrow[k - j - 1], rc, 31));
+            int64_t tmp = ROUND_MULL(x, gain, fbits);
+
+            /* per RFC 8251 section 6, if this calculation overflows, the filter
+               is considered unstable. */
+            if (tmp < INT32_MIN || tmp > INT32_MAX)
+                return 0;
+
+            row[j] = (int32_t)tmp;
         }
     }
 }
@@ -600,7 +606,7 @@ static void silk_decode_frame(SilkContext *s, OpusRangeCoder *rc,
         if (lag_absolute) {
             /* primary lag is coded absolute */
             int highbits, lowbits;
-            static const uint16_t *model[] = {
+            static const uint16_t * const model[] = {
                 ff_silk_model_pitch_lowbits_nb, ff_silk_model_pitch_lowbits_mb,
                 ff_silk_model_pitch_lowbits_wb
             };
@@ -634,11 +640,11 @@ static void silk_decode_frame(SilkContext *s, OpusRangeCoder *rc,
         ltpfilter = ff_opus_rc_dec_cdf(rc, ff_silk_model_ltp_filter);
         for (i = 0; i < s->subframes; i++) {
             int index, j;
-            static const uint16_t *filter_sel[] = {
+            static const uint16_t * const filter_sel[] = {
                 ff_silk_model_ltp_filter0_sel, ff_silk_model_ltp_filter1_sel,
                 ff_silk_model_ltp_filter2_sel
             };
-            static const int8_t (*filter_taps[])[5] = {
+            static const int8_t (* const filter_taps[])[5] = {
                 ff_silk_ltp_filter0_taps, ff_silk_ltp_filter1_taps, ff_silk_ltp_filter2_taps
             };
             index = ff_opus_rc_dec_cdf(rc, filter_sel[ltpfilter]);
@@ -807,7 +813,7 @@ int ff_silk_decode_superframe(SilkContext *s, OpusRangeCoder *rc,
 
         redundancy[i] = ff_opus_rc_dec_log(rc, 1);
         if (redundancy[i]) {
-            av_log(s->avctx, AV_LOG_ERROR, "LBRR frames present; this is unsupported\n");
+            avpriv_report_missing_feature(s->avctx, "LBRR frames");
             return AVERROR_PATCHWELCOME;
         }
     }

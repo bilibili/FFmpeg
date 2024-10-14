@@ -28,16 +28,18 @@
 
 void ff_add_int16_mmx(uint16_t *dst, const uint16_t *src, unsigned mask, int w);
 void ff_add_int16_sse2(uint16_t *dst, const uint16_t *src, unsigned mask, int w);
+void ff_add_int16_avx2(uint16_t *dst, const uint16_t *src, unsigned mask, int w);
+
 void ff_add_hfyu_left_pred_bgr32_mmx(uint8_t *dst, const uint8_t *src,
                                      intptr_t w, uint8_t *left);
 void ff_add_hfyu_left_pred_bgr32_sse2(uint8_t *dst, const uint8_t *src,
                                       intptr_t w, uint8_t *left);
 void ff_add_hfyu_median_pred_int16_mmxext(uint16_t *dst, const uint16_t *top, const uint16_t *diff, unsigned mask, int w, int *left, int *left_top);
 
-av_cold void ff_huffyuvdsp_init_x86(HuffYUVDSPContext *c, AVCodecContext *avctx)
+av_cold void ff_huffyuvdsp_init_x86(HuffYUVDSPContext *c, enum AVPixelFormat pix_fmt)
 {
     int cpu_flags = av_get_cpu_flags();
-    const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(avctx->pix_fmt);
+    const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(pix_fmt);
 
     if (ARCH_X86_32 && EXTERNAL_MMX(cpu_flags)) {
         c->add_hfyu_left_pred_bgr32 = ff_add_hfyu_left_pred_bgr32_mmx;
@@ -51,5 +53,9 @@ av_cold void ff_huffyuvdsp_init_x86(HuffYUVDSPContext *c, AVCodecContext *avctx)
     if (EXTERNAL_SSE2(cpu_flags)) {
         c->add_int16 = ff_add_int16_sse2;
         c->add_hfyu_left_pred_bgr32 = ff_add_hfyu_left_pred_bgr32_sse2;
+    }
+
+    if (EXTERNAL_AVX2_FAST(cpu_flags)) {
+        c->add_int16 = ff_add_int16_avx2;
     }
 }

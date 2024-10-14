@@ -21,19 +21,16 @@
  */
 
 #include "config.h"
-#if HAVE_ALTIVEC_H
-#include <altivec.h>
-#endif
 
 #include "libavutil/attributes.h"
 #include "libavutil/cpu.h"
 #include "libavutil/ppc/cpu.h"
-#include "libavutil/ppc/types_altivec.h"
 #include "libavutil/ppc/util_altivec.h"
+
 #include "libavcodec/lossless_videodsp.h"
 
 #if HAVE_ALTIVEC
-static void add_bytes_altivec(uint8_t *dst, uint8_t *src, intptr_t w)
+static void add_bytes_altivec(uint8_t *dst, uint8_t *src, ptrdiff_t w)
 {
     register int i;
     register vector unsigned char vdst, vsrc;

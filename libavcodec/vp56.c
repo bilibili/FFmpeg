@@ -507,6 +507,8 @@ static int vp56_size_changed(VP56Context *s)
     s->plane_height[0] = s->plane_height[3] = avctx->coded_height;
     s->plane_height[1] = s->plane_height[2] = avctx->coded_height/2;
 
+    s->have_undamaged_frame = 0;
+
     for (i=0; i<4; i++)
         s->stride[i] = s->flip * s->frames[VP56_FRAME_CURRENT]->linesize[i];
 
@@ -572,13 +574,18 @@ int ff_vp56_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
     }
 
     ret = ff_get_buffer(avctx, p, AV_GET_BUFFER_FLAG_REF);
-    if (ret < 0)
+    if (ret < 0) {
+        if (res == VP56_SIZE_CHANGE)
+            ff_set_dimensions(avctx, 0, 0);
         return ret;
+    }
 
     if (avctx->pix_fmt == AV_PIX_FMT_YUVA420P) {
         av_frame_unref(s->alpha_context->frames[VP56_FRAME_CURRENT]);
         if ((ret = av_frame_ref(s->alpha_context->frames[VP56_FRAME_CURRENT], p)) < 0) {
             av_frame_unref(p);
+            if (res == VP56_SIZE_CHANGE)
+                ff_set_dimensions(avctx, 0, 0);
             return ret;
         }
     }
@@ -612,7 +619,11 @@ int ff_vp56_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
         }
     }
 
+    s->discard_frame = 0;
     avctx->execute2(avctx, ff_vp56_decode_mbs, 0, 0, (avctx->pix_fmt == AV_PIX_FMT_YUVA420P) + 1);
+
+    if (s->discard_frame)
+        return AVERROR_INVALIDDATA;
 
     if ((res = av_frame_ref(data, p)) < 0)
         return res;
@@ -699,8 +710,13 @@ static int ff_vp56_decode_mbs(AVCodecContext *avctx, void *data,
         for (mb_col=0; mb_col<s->mb_width; mb_col++) {
             if (!damaged) {
                 int ret = vp56_decode_mb(s, mb_row, mb_col, is_alpha);
-                if (ret < 0)
+                if (ret < 0) {
                     damaged = 1;
+                    if (!s->have_undamaged_frame || !avctx->error_concealment) {
+                        s->discard_frame = 1;
+                        return AVERROR_INVALIDDATA;
+                    }
+                }
             }
             if (damaged)
                 vp56_conceal_mb(s, mb_row, mb_col, is_alpha);
@@ -716,6 +732,9 @@ static int ff_vp56_decode_mbs(AVCodecContext *avctx, void *data,
             }
         }
     }
+
+    if (!damaged)
+        s->have_undamaged_frame = 1;
 
 next:
     if (p->key_frame || s->golden_frame) {
@@ -749,7 +768,6 @@ av_cold int ff_vp56_init_context(AVCodecContext *avctx, VP56Context *s,
     ff_hpeldsp_init(&s->hdsp, avctx->flags);
     ff_videodsp_init(&s->vdsp, 8);
     ff_vp3dsp_init(&s->vp3dsp, avctx->flags);
-    ff_vp56dsp_init(&s->vp56dsp, avctx->codec->id);
     for (i = 0; i < 64; i++) {
 #define TRANSPOSE(x) (((x) >> 3) | (((x) & 7) << 3))
         s->idct_scantable[i] = TRANSPOSE(ff_zigzag_direct[i]);

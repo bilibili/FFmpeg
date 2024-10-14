@@ -75,7 +75,10 @@ static const AVOption options[] = {
 };
 
 static const AVClass class = {
-    "libopenh264enc", av_default_item_name, options, LIBAVUTIL_VERSION_INT
+    .class_name = "libvo_amrwbenc",
+    .item_name  = av_default_item_name,
+    .option     = options,
+    .version    = LIBAVUTIL_VERSION_INT,
 };
 
 static av_cold int svc_encode_close(AVCodecContext *avctx)
@@ -112,10 +115,10 @@ static av_cold int svc_encode_init(AVCodecContext *avctx)
 
     // Set the logging callback function to one that uses av_log() (see implementation above).
     callback_function = (WelsTraceCallback) ff_libopenh264_trace_callback;
-    (*s->encoder)->SetOption(s->encoder, ENCODER_OPTION_TRACE_CALLBACK, (void *)&callback_function);
+    (*s->encoder)->SetOption(s->encoder, ENCODER_OPTION_TRACE_CALLBACK, &callback_function);
 
     // Set the AVCodecContext as the libopenh264 callback context so that it can be passed to av_log().
-    (*s->encoder)->SetOption(s->encoder, ENCODER_OPTION_TRACE_CALLBACK_CONTEXT, (void *)&avctx);
+    (*s->encoder)->SetOption(s->encoder, ENCODER_OPTION_TRACE_CALLBACK_CONTEXT, &avctx);
 
     (*s->encoder)->GetDefaultParams(s->encoder, &param);
 
@@ -243,6 +246,10 @@ static int svc_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
     sp.iPicWidth  = avctx->width;
     sp.iPicHeight = avctx->height;
 
+    if (frame->pict_type == AV_PICTURE_TYPE_I) {
+        (*s->encoder)->ForceIntraFrame(s->encoder, true);
+    }
+
     encoded = (*s->encoder)->EncodeFrame(s->encoder, &sp, &fbi);
     if (encoded != cmResultSuccess) {
         av_log(avctx, AV_LOG_ERROR, "EncodeFrame failed\n");
@@ -298,4 +305,5 @@ AVCodec ff_libopenh264_encoder = {
     .pix_fmts       = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUV420P,
                                                     AV_PIX_FMT_NONE },
     .priv_class     = &class,
+    .wrapper_name   = "libopenh264",
 };

@@ -26,7 +26,6 @@
 
 #include "libavutil/internal.h"
 #include "avfilter.h"
-#include "avfiltergraph.h"
 #include "formats.h"
 #include "framepool.h"
 #include "framequeue.h"
@@ -34,6 +33,7 @@
 #include "version.h"
 #include "video.h"
 #include "libavcodec/avcodec.h"
+#include "libavcodec/internal.h"
 
 typedef struct AVFilterCommand {
     double time;                ///< time expressed in seconds
@@ -247,14 +247,6 @@ void ff_command_queue_pop(AVFilterContext *filter);
 
 /* misc trace functions */
 
-/* #define FF_AVFILTER_TRACE */
-
-#ifdef FF_AVFILTER_TRACE
-#    define ff_tlog(pctx, ...) av_log(pctx, AV_LOG_DEBUG, __VA_ARGS__)
-#else
-#    define ff_tlog(pctx, ...) do { if (0) av_log(pctx, AV_LOG_DEBUG, __VA_ARGS__); } while (0)
-#endif
-
 #define FF_TPRINTF_START(ctx, func) ff_tlog(NULL, "%-16s: ", #func)
 
 char *ff_get_ref_perms_string(char *buf, size_t buf_size, int perms);
@@ -387,6 +379,12 @@ int ff_filter_activate(AVFilterContext *filter);
 void ff_filter_graph_remove_filter(AVFilterGraph *graph, AVFilterContext *filter);
 
 /**
+ * The filter is aware of hardware frames, and any hardware frame context
+ * should not be automatically propagated through it.
+ */
+#define FF_FILTER_FLAG_HWFRAME_AWARE (1 << 0)
+
+/**
  * Run one round of processing on a filter graph.
  */
 int ff_filter_graph_run_once(AVFilterGraph *graph);
@@ -412,5 +410,21 @@ static inline int ff_norm_qscale(int qscale, int type)
  * This number is always same or less than graph->nb_threads.
  */
 int ff_filter_get_nb_threads(AVFilterContext *ctx);
+
+/**
+ * Perform any additional setup required for hardware frames.
+ *
+ * link->hw_frames_ctx must be set before calling this function.
+ * Inside link->hw_frames_ctx, the fields format, sw_format, width and
+ * height must be set.  If dynamically allocated pools are not supported,
+ * then initial_pool_size must also be set, to the minimum hardware frame
+ * pool size necessary for the filter to work (taking into account any
+ * frames which need to stored for use in operations as appropriate).  If
+ * default_pool_size is nonzero, then it will be used as the pool size if
+ * no other modification takes place (this can be used to preserve
+ * compatibility).
+ */
+int ff_filter_init_hw_frames(AVFilterContext *avctx, AVFilterLink *link,
+                             int default_pool_size);
 
 #endif /* AVFILTER_INTERNAL_H */

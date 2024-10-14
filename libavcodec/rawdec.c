@@ -92,12 +92,14 @@ static av_cold int raw_init_decoder(AVCodecContext *avctx)
         return AVERROR(EINVAL);
     }
 
-    if (desc->flags & (AV_PIX_FMT_FLAG_PAL | AV_PIX_FMT_FLAG_PSEUDOPAL)) {
+    if (desc->flags & (AV_PIX_FMT_FLAG_PAL | FF_PSEUDOPAL)) {
         context->palette = av_buffer_alloc(AVPALETTE_SIZE);
         if (!context->palette)
             return AVERROR(ENOMEM);
+#if FF_API_PSEUDOPAL
         if (desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL)
             avpriv_set_systematic_pal2((uint32_t*)context->palette->data, avctx->pix_fmt);
+#endif
         else {
             memset(context->palette->data, 0, AVPALETTE_SIZE);
             if (avctx->bits_per_coded_sample == 1)
@@ -237,8 +239,8 @@ static int raw_decode(AVCodecContext *avctx, void *data, int *got_frame,
     if (res < 0)
         return res;
 
-    av_frame_set_pkt_pos     (frame, avctx->internal->pkt->pos);
-    av_frame_set_pkt_duration(frame, avctx->internal->pkt->duration);
+    frame->pkt_pos      = avctx->internal->last_pkt_props->pos;
+    frame->pkt_duration = avctx->internal->last_pkt_props->duration;
 
     if (context->tff >= 0) {
         frame->interlaced_frame = 1;
@@ -423,7 +425,7 @@ static int raw_decode(AVCodecContext *avctx, void *data, int *got_frame,
     }
 
     if ((avctx->pix_fmt == AV_PIX_FMT_PAL8 && buf_size < context->frame_size) ||
-        (desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL)) {
+        (desc->flags & FF_PSEUDOPAL)) {
         frame->buf[1]  = av_buffer_ref(context->palette);
         if (!frame->buf[1]) {
             av_buffer_unref(&frame->buf[0]);

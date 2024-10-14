@@ -186,8 +186,17 @@ static int config_input(AVFilterLink *inlink)
 
     s->start_duration = av_rescale(s->start_duration, inlink->sample_rate,
                                    AV_TIME_BASE);
+    if (s->start_duration < 0) {
+        av_log(ctx, AV_LOG_WARNING, "start duration must be non-negative\n");
+        s->start_duration = -s->start_duration;
+    }
+
     s->stop_duration  = av_rescale(s->stop_duration, inlink->sample_rate,
                                    AV_TIME_BASE);
+    if (s->stop_duration < 0) {
+        av_log(ctx, AV_LOG_WARNING, "stop duration must be non-negative\n");
+        s->stop_duration = -s->stop_duration;
+    }
 
     s->start_holdoff = av_malloc_array(FFMAX(s->start_duration, 1),
                                        sizeof(*s->start_holdoff) *
@@ -217,11 +226,18 @@ static int config_input(AVFilterLink *inlink)
     return 0;
 }
 
-static void flush(AVFrame *out, AVFilterLink *outlink,
+static void flush(SilenceRemoveContext *s,
+                  AVFrame *out, AVFilterLink *outlink,
                   int *nb_samples_written, int *ret)
 {
     if (*nb_samples_written) {
         out->nb_samples = *nb_samples_written / outlink->channels;
+
+        out->pts = s->next_pts;
+        s->next_pts += av_rescale_q(out->nb_samples,
+                                    (AVRational){1, outlink->sample_rate},
+                                    outlink->time_base);
+
         *ret = ff_filter_frame(outlink, out);
         *nb_samples_written = 0;
     } else {
@@ -297,6 +313,12 @@ silence_trim_flush:
 
         memcpy(out->data[0], &s->start_holdoff[s->start_holdoff_offset],
                nbs * sizeof(double));
+
+        out->pts = s->next_pts;
+        s->next_pts += av_rescale_q(out->nb_samples,
+                                    (AVRational){1, outlink->sample_rate},
+                                    outlink->time_base);
+
         s->start_holdoff_offset += nbs;
 
         ret = ff_filter_frame(outlink, out);
@@ -330,7 +352,7 @@ silence_copy:
 
                 if (threshold && s->stop_holdoff_end && !s->leave_silence) {
                     s->mode = SILENCE_COPY_FLUSH;
-                    flush(out, outlink, &nb_samples_written, &ret);
+                    flush(s, out, outlink, &nb_samples_written, &ret);
                     goto silence_copy_flush;
                 } else if (threshold) {
                     for (j = 0; j < inlink->channels; j++) {
@@ -358,7 +380,7 @@ silence_copy:
 
                             if (!s->restart) {
                                 s->mode = SILENCE_STOP;
-                                flush(out, outlink, &nb_samples_written, &ret);
+                                flush(s, out, outlink, &nb_samples_written, &ret);
                                 goto silence_stop;
                             } else {
                                 s->stop_found_periods = 0;
@@ -367,19 +389,25 @@ silence_copy:
                                 s->start_holdoff_end = 0;
                                 clear_window(s);
                                 s->mode = SILENCE_TRIM;
-                                flush(out, outlink, &nb_samples_written, &ret);
+                                flush(s, out, outlink, &nb_samples_written, &ret);
                                 goto silence_trim;
                             }
                         }
                         s->mode = SILENCE_COPY_FLUSH;
-                        flush(out, outlink, &nb_samples_written, &ret);
+                        flush(s, out, outlink, &nb_samples_written, &ret);
                         goto silence_copy_flush;
                     }
                 }
             }
-            flush(out, outlink, &nb_samples_written, &ret);
+            flush(s, out, outlink, &nb_samples_written, &ret);
         } else {
             memcpy(obuf, ibuf, sizeof(double) * nbs * inlink->channels);
+
+            out->pts = s->next_pts;
+            s->next_pts += av_rescale_q(out->nb_samples,
+                                        (AVRational){1, outlink->sample_rate},
+                                        outlink->time_base);
+
             ret = ff_filter_frame(outlink, out);
         }
         break;
@@ -400,6 +428,11 @@ silence_copy_flush:
         memcpy(out->data[0], &s->stop_holdoff[s->stop_holdoff_offset],
                nbs * sizeof(double));
         s->stop_holdoff_offset += nbs;
+
+        out->pts = s->next_pts;
+        s->next_pts += av_rescale_q(out->nb_samples,
+                                    (AVRational){1, outlink->sample_rate},
+                                    outlink->time_base);
 
         ret = ff_filter_frame(outlink, out);
 
@@ -439,7 +472,13 @@ static int request_frame(AVFilterLink *outlink)
 
             memcpy(frame->data[0], &s->stop_holdoff[s->stop_holdoff_offset],
                    nbs * sizeof(double));
-            ret = ff_filter_frame(ctx->inputs[0], frame);
+
+            frame->pts = s->next_pts;
+            s->next_pts += av_rescale_q(frame->nb_samples,
+                                        (AVRational){1, outlink->sample_rate},
+                                        outlink->time_base);
+
+            ret = ff_filter_frame(outlink, frame);
         }
         s->mode = SILENCE_STOP;
     }

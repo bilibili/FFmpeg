@@ -207,11 +207,26 @@ static int h263_decode_gob_header(MpegEncContext *s)
 }
 
 /**
- * Decode the group of blocks / video packet header.
+ * Decode the group of blocks / video packet header / slice header (MPEG-4 Studio).
  * @return bit position of the resync_marker, or <0 if none was found
  */
 int ff_h263_resync(MpegEncContext *s){
     int left, pos, ret;
+
+    /* In MPEG-4 studio mode look for a new slice startcode
+     * and decode slice header */
+    if(s->codec_id==AV_CODEC_ID_MPEG4 && s->studio_profile) {
+        align_get_bits(&s->gb);
+
+        while (get_bits_left(&s->gb) >= 32 && show_bits_long(&s->gb, 32) != SLICE_START_CODE) {
+            get_bits(&s->gb, 8);
+        }
+
+        if (show_bits_long(&s->gb, 32) == SLICE_START_CODE)
+            return get_bits_count(&s->gb);
+        else
+            return -1;
+    }
 
     if(s->codec_id==AV_CODEC_ID_MPEG4){
         skip_bits1(&s->gb);
@@ -305,7 +320,7 @@ static int h263p_decode_umotion(MpegEncContext * s, int pred)
       code += get_bits1(&s->gb);
       if (code >= 32768) {
           avpriv_request_sample(s->avctx, "Huge DMV");
-          return AVERROR_INVALIDDATA;
+          return 0xffff;
       }
    }
    sign = code & 1;
@@ -574,7 +589,7 @@ not_coded:
 
 static int h263_skip_b_part(MpegEncContext *s, int cbp)
 {
-    LOCAL_ALIGNED_16(int16_t, dblock, [64]);
+    LOCAL_ALIGNED_32(int16_t, dblock, [64]);
     int i, mbi;
     int bli[6];
 

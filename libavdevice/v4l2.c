@@ -30,6 +30,8 @@
  * V4L2_PIX_FMT_* and AV_PIX_FMT_*
  */
 
+#include <stdatomic.h>
+
 #include "v4l2-common.h"
 #include <dirent.h>
 
@@ -78,7 +80,7 @@ struct video_data {
     int64_t last_time_m;
 
     int buffers;
-    volatile int buffers_queued;
+    atomic_int buffers_queued;
     void **buf_start;
     unsigned int *buf_len;
     char *standard;
@@ -104,7 +106,7 @@ struct buff_data {
     int index;
 };
 
-static int device_open(AVFormatContext *ctx)
+static int device_open(AVFormatContext *ctx, const char* device_path)
 {
     struct video_data *s = ctx->priv_data;
     struct v4l2_capability cap;
@@ -145,11 +147,11 @@ static int device_open(AVFormatContext *ctx)
         flags |= O_NONBLOCK;
     }
 
-    fd = v4l2_open(ctx->filename, flags, 0);
+    fd = v4l2_open(device_path, flags, 0);
     if (fd < 0) {
         err = AVERROR(errno);
         av_log(ctx, AV_LOG_ERROR, "Cannot open video device %s: %s\n",
-               ctx->filename, av_err2str(err));
+               device_path, av_err2str(err));
         return err;
     }
 
@@ -402,7 +404,7 @@ static int enqueue_buffer(struct video_data *s, struct v4l2_buffer *buf)
         res = AVERROR(errno);
         av_log(NULL, AV_LOG_ERROR, "ioctl(VIDIOC_QBUF): %s\n", av_err2str(res));
     } else {
-        avpriv_atomic_int_add_and_fetch(&s->buffers_queued, 1);
+        atomic_fetch_add(&s->buffers_queued, 1);
     }
 
     return res;
@@ -490,6 +492,7 @@ static int mmap_read_frame(AVFormatContext *ctx, AVPacket *pkt)
         .type   = V4L2_BUF_TYPE_VIDEO_CAPTURE,
         .memory = V4L2_MEMORY_MMAP
     };
+    struct timeval buf_ts;
     int res;
 
     pkt->size = 0;
@@ -506,13 +509,15 @@ static int mmap_read_frame(AVFormatContext *ctx, AVPacket *pkt)
         return res;
     }
 
+    buf_ts = buf.timestamp;
+
     if (buf.index >= s->buffers) {
         av_log(ctx, AV_LOG_ERROR, "Invalid buffer index received.\n");
         return AVERROR(EINVAL);
     }
-    avpriv_atomic_int_add_and_fetch(&s->buffers_queued, -1);
+    atomic_fetch_add(&s->buffers_queued, -1);
     // always keep at least one buffer queued
-    av_assert0(avpriv_atomic_int_get(&s->buffers_queued) >= 1);
+    av_assert0(atomic_load(&s->buffers_queued) >= 1);
 
 #ifdef V4L2_BUF_FLAG_ERROR
     if (buf.flags & V4L2_BUF_FLAG_ERROR) {
@@ -538,7 +543,7 @@ static int mmap_read_frame(AVFormatContext *ctx, AVPacket *pkt)
     }
 
     /* Image is at s->buff_start[buf.index] */
-    if (avpriv_atomic_int_get(&s->buffers_queued) == FFMAX(s->buffers / 8, 1)) {
+    if (atomic_load(&s->buffers_queued) == FFMAX(s->buffers / 8, 1)) {
         /* when we start getting low on queued buffers, fall back on copying data */
         res = av_new_packet(pkt, buf.bytesused);
         if (res < 0) {
@@ -581,7 +586,7 @@ static int mmap_read_frame(AVFormatContext *ctx, AVPacket *pkt)
             return AVERROR(ENOMEM);
         }
     }
-    pkt->pts = buf.timestamp.tv_sec * INT64_C(1000000) + buf.timestamp.tv_usec;
+    pkt->pts = buf_ts.tv_sec * INT64_C(1000000) + buf_ts.tv_usec;
     convert_timestamp(ctx, &pkt->pts);
 
     return pkt->size;
@@ -607,7 +612,7 @@ static int mmap_start(AVFormatContext *ctx)
             return res;
         }
     }
-    s->buffers_queued = s->buffers;
+    atomic_store(&s->buffers_queued, s->buffers);
 
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (v4l2_ioctl(s->fd, VIDIOC_STREAMON, &type) < 0) {
@@ -835,7 +840,7 @@ static int v4l2_read_header(AVFormatContext *ctx)
         v4l2_log_file = fopen("/dev/null", "w");
 #endif
 
-    s->fd = device_open(ctx);
+    s->fd = device_open(ctx, ctx->url);
     if (s->fd < 0)
         return s->fd;
 
@@ -882,14 +887,14 @@ static int v4l2_read_header(AVFormatContext *ctx)
     avpriv_set_pts_info(st, 64, 1, 1000000); /* 64 bits pts in us */
 
     if (s->pixel_format) {
-        AVCodec *codec = avcodec_find_decoder_by_name(s->pixel_format);
+        const AVCodecDescriptor *desc = avcodec_descriptor_get_by_name(s->pixel_format);
 
-        if (codec)
-            ctx->video_codec_id = codec->id;
+        if (desc)
+            ctx->video_codec_id = desc->id;
 
         pix_fmt = av_get_pix_fmt(s->pixel_format);
 
-        if (pix_fmt == AV_PIX_FMT_NONE && !codec) {
+        if (pix_fmt == AV_PIX_FMT_NONE && !desc) {
             av_log(ctx, AV_LOG_ERROR, "No such input format: %s.\n",
                    s->pixel_format);
 
@@ -1000,7 +1005,7 @@ static int v4l2_read_close(AVFormatContext *ctx)
 {
     struct video_data *s = ctx->priv_data;
 
-    if (avpriv_atomic_int_get(&s->buffers_queued) != s->buffers)
+    if (atomic_load(&s->buffers_queued) != s->buffers)
         av_log(ctx, AV_LOG_WARNING, "Some buffers are still owned by the caller on "
                "close.\n");
 
@@ -1037,11 +1042,13 @@ static int v4l2_get_device_list(AVFormatContext *ctx, AVDeviceInfoList *device_l
         return ret;
     }
     while ((entry = readdir(dir))) {
+        char device_name[256];
+
         if (!v4l2_is_v4l_dev(entry->d_name))
             continue;
 
-        snprintf(ctx->filename, sizeof(ctx->filename), "/dev/%s", entry->d_name);
-        if ((s->fd = device_open(ctx)) < 0)
+        snprintf(device_name, sizeof(device_name), "/dev/%s", entry->d_name);
+        if ((s->fd = device_open(ctx, device_name)) < 0)
             continue;
 
         if (v4l2_ioctl(s->fd, VIDIOC_QUERYCAP, &cap) < 0) {
@@ -1055,7 +1062,7 @@ static int v4l2_get_device_list(AVFormatContext *ctx, AVDeviceInfoList *device_l
             ret = AVERROR(ENOMEM);
             goto fail;
         }
-        device->device_name = av_strdup(ctx->filename);
+        device->device_name = av_strdup(device_name);
         device->device_description = av_strdup(cap.card);
         if (!device->device_name || !device->device_description) {
             ret = AVERROR(ENOMEM);

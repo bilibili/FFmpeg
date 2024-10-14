@@ -262,7 +262,7 @@ static void decode_pitch_lag_high(int *lag_int, int *lag_frac, int pitch_index,
             *lag_frac = pitch_index - (*lag_int << 2) + 136;
         } else if (pitch_index < 440) {
             *lag_int  = (pitch_index + 257 - 376) >> 1;
-            *lag_frac = (pitch_index - (*lag_int << 1) + 256 - 376) << 1;
+            *lag_frac = (pitch_index - (*lag_int << 1) + 256 - 376) * 2;
             /* the actual resolution is 1/2 but expressed as 1/4 */
         } else {
             *lag_int  = pitch_index - 280;
@@ -611,7 +611,7 @@ static float voice_factor(float *p_vector, float p_gain,
                                                           AMRWB_SFR_SIZE) *
                     f_gain * f_gain;
 
-    return (p_ener - f_ener) / (p_ener + f_ener);
+    return (p_ener - f_ener) / (p_ener + f_ener + 0.01);
 }
 
 /**

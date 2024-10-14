@@ -459,8 +459,8 @@ static av_cold int pulse_write_header(AVFormatContext *h)
     st = h->streams[0];
 
     if (!stream_name) {
-        if (h->filename[0])
-            stream_name = h->filename;
+        if (h->url[0])
+            stream_name = h->url;
         else
             stream_name = "Playback";
     }
@@ -681,9 +681,9 @@ static int pulse_write_frame(AVFormatContext *h, int stream_index,
                AVERROR(EINVAL) : 0;
 
     pkt.data     = (*frame)->data[0];
-    pkt.size     = (*frame)->nb_samples * av_get_bytes_per_sample((*frame)->format) * av_frame_get_channels(*frame);
+    pkt.size     = (*frame)->nb_samples * av_get_bytes_per_sample((*frame)->format) * (*frame)->channels;
     pkt.dts      = (*frame)->pkt_dts;
-    pkt.duration = av_frame_get_pkt_duration(*frame);
+    pkt.duration = (*frame)->pkt_duration;
     return pulse_write_packet(h, &pkt);
 }
 

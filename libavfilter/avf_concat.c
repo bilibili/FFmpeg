@@ -36,7 +36,7 @@
 
 #define TYPE_ALL 2
 
-typedef struct {
+typedef struct ConcatContext {
     const AVClass *class;
     unsigned nb_streams[TYPE_ALL]; /**< number of out streams of each type */
     unsigned nb_segments;
@@ -361,6 +361,7 @@ static av_cold int init(AVFilterContext *ctx)
 {
     ConcatContext *cat = ctx->priv;
     unsigned seg, type, str;
+    int ret;
 
     /* create input pads */
     for (seg = 0; seg < cat->nb_segments; seg++) {
@@ -373,7 +374,10 @@ static av_cold int init(AVFilterContext *ctx)
                     .filter_frame     = filter_frame,
                 };
                 pad.name = av_asprintf("in%d:%c%d", seg, "va"[type], str);
-                ff_insert_inpad(ctx, ctx->nb_inputs, &pad);
+                if ((ret = ff_insert_inpad(ctx, ctx->nb_inputs, &pad)) < 0) {
+                    av_freep(&pad.name);
+                    return ret;
+                }
             }
         }
     }
@@ -386,7 +390,10 @@ static av_cold int init(AVFilterContext *ctx)
                 .request_frame = request_frame,
             };
             pad.name = av_asprintf("out:%c%d", "va"[type], str);
-            ff_insert_outpad(ctx, ctx->nb_outputs, &pad);
+            if ((ret = ff_insert_outpad(ctx, ctx->nb_outputs, &pad)) < 0) {
+                av_freep(&pad.name);
+                return ret;
+            }
         }
     }
 
@@ -411,6 +418,19 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_freep(&cat->in);
 }
 
+static int process_command(AVFilterContext *ctx, const char *cmd, const char *args,
+                           char *res, int res_len, int flags)
+{
+    int ret = AVERROR(ENOSYS);
+
+    if (!strcmp(cmd, "next")) {
+        av_log(ctx, AV_LOG_VERBOSE, "Command received: next\n");
+        return flush_segment(ctx);
+    }
+
+    return ret;
+}
+
 AVFilter ff_avf_concat = {
     .name          = "concat",
     .description   = NULL_IF_CONFIG_SMALL("Concatenate audio and video streams."),
@@ -422,4 +442,5 @@ AVFilter ff_avf_concat = {
     .outputs       = NULL,
     .priv_class    = &concat_class,
     .flags         = AVFILTER_FLAG_DYNAMIC_INPUTS | AVFILTER_FLAG_DYNAMIC_OUTPUTS,
+    .process_command = process_command,
 };

@@ -297,7 +297,7 @@ static av_cold int decode_init(AVCodecContext *avctx)
     if (ret < 0)
         return ret;
 
-    ff_huffyuvdsp_init(&s->hdsp, avctx);
+    ff_huffyuvdsp_init(&s->hdsp, avctx->pix_fmt);
     ff_llviddsp_init(&s->llviddsp);
     memset(s->vlc, 0, 4 * sizeof(VLC));
 
@@ -578,6 +578,8 @@ static av_cold int decode_init_thread_copy(AVCodecContext *avctx)
 {
     HYuvContext *s = avctx->priv_data;
     int i, ret;
+
+    s->avctx = avctx;
 
     if ((ret = ff_huffyuv_alloc_temp(s)) < 0) {
         ff_huffyuv_common_end(s);
@@ -916,6 +918,9 @@ static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
     ThreadFrame frame = { .f = data };
     AVFrame *const p = data;
     int table_size = 0, ret;
+
+    if (buf_size < (width * height + 7)/8)
+        return AVERROR_INVALIDDATA;
 
     av_fast_padded_malloc(&s->bitstream_buffer,
                    &s->bitstream_buffer_size,

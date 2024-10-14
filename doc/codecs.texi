@@ -44,12 +44,6 @@ Use 1/4 pel motion compensation.
 Use loop filter.
 @item qscale
 Use fixed qscale.
-@item gmc
-Use gmc.
-@item mv0
-Always try a mb with mv=<0,0>.
-@item input_preserved
-
 @item pass1
 Use internal 2pass ratecontrol in first pass mode.
 @item pass2
@@ -62,8 +56,6 @@ Do not draw edges.
 Set error[?] variables during encoding.
 @item truncated
 
-@item naq
-Normalize adaptive quantization.
 @item ildct
 Use interlaced DCT.
 @item low_delay
@@ -475,8 +467,6 @@ rate control
 macroblock (MB) type
 @item qp
 per-block quantization parameter (QP)
-@item mv
-motion vector
 @item dct_coeff
 
 @item green_metadata
@@ -486,39 +476,18 @@ display complexity metadata for the upcoming frame, GoP or for a given duration.
 
 @item startcode
 
-@item pts
-
 @item er
 error recognition
 @item mmco
 memory management control operations (H.264)
 @item bugs
 
-@item vis_qp
-visualize quantization parameter (QP), lower QP are tinted greener
-@item vis_mb_type
-visualize block types
 @item buffers
 picture buffer allocations
 @item thread_ops
 threading operations
 @item nomc
 skip motion compensation
-@end table
-
-@item vismv @var{integer} (@emph{decoding,video})
-Visualize motion vectors (MVs).
-
-This option is deprecated, see the codecview filter instead.
-
-Possible values:
-@table @samp
-@item pf
-forward predicted MVs of P-frames
-@item bf
-forward predicted MVs of B-frames
-@item bb
-backward predicted MVs of B-frames
 @end table
 
 @item cmp @var{integer} (@emph{encoding,video})
@@ -756,8 +725,6 @@ deflate-based coder
 Set context model.
 
 @item slice_flags @var{integer}
-
-@item xvmc_acceleration @var{integer}
 
 @item mbd @var{integer} (@emph{encoding,video})
 Set macroblock decision algorithm (high quality mode).
@@ -1075,6 +1042,8 @@ SMPTE ST 428-1
 SMPTE 431-2
 @item smpte432
 SMPTE 432-1
+@item jedec-p22
+JEDEC P22
 @end table
 
 @item color_trc @var{integer} (@emph{decoding/encoding,video})
@@ -1256,7 +1225,7 @@ Interlaced video, top coded first, bottom displayed first
 Interlaced video, bottom coded first, top displayed first
 @end table
 
-@item skip_alpha @var{integer} (@emph{decoding,video})
+@item skip_alpha @var{bool} (@emph{decoding,video})
 Set to 1 to disable processing alpha (transparency). This works like the
 @samp{gray} flag in the @option{flags} option which skips chroma information
 instead of alpha. Default is 0.
@@ -1276,6 +1245,16 @@ ffprobe -dump_separator "
 @item max_pixels @var{integer} (@emph{decoding/encoding,video})
 Maximum number of pixels per image. This value can be used to avoid out of
 memory failures due to large images.
+
+@item apply_cropping @var{bool} (@emph{decoding,video})
+Enable cropping if cropping parameters are multiples of the required
+alignment for the left and top parameters. If the alignment is not met the
+cropping will be partially applied to maintain alignment.
+Default is 1 (enabled).
+Note: The required alignment depends on if @code{AV_CODEC_FLAG_UNALIGNED} is set and the
+CPU. @code{AV_CODEC_FLAG_UNALIGNED} cannot be changed from the command line. Also hardware
+decoders will not apply left/top Cropping.
+
 
 @end table
 

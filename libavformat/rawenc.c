@@ -65,7 +65,7 @@ static int adx_write_trailer(AVFormatContext *s)
     AVIOContext *pb = s->pb;
     AVCodecParameters *par = s->streams[0]->codecpar;
 
-    if (pb->seekable) {
+    if (pb->seekable & AVIO_SEEKABLE_NORMAL) {
         int64_t file_size = avio_tell(pb);
         uint64_t sample_count = (file_size - 36) / par->channels / 18 * 32;
         if (sample_count <= UINT32_MAX) {
@@ -91,6 +91,32 @@ AVOutputFormat ff_adx_muxer = {
 };
 #endif
 
+#if CONFIG_APTX_MUXER
+AVOutputFormat ff_aptx_muxer = {
+    .name              = "aptx",
+    .long_name         = NULL_IF_CONFIG_SMALL("raw aptX (Audio Processing Technology for Bluetooth)"),
+    .extensions        = "aptx",
+    .audio_codec       = AV_CODEC_ID_APTX,
+    .video_codec       = AV_CODEC_ID_NONE,
+    .write_header      = force_one_stream,
+    .write_packet      = ff_raw_write_packet,
+    .flags             = AVFMT_NOTIMESTAMPS,
+};
+#endif
+
+#if CONFIG_APTX_HD_MUXER
+AVOutputFormat ff_aptx_hd_muxer = {
+    .name              = "aptx_hd",
+    .long_name         = NULL_IF_CONFIG_SMALL("raw aptX HD (Audio Processing Technology for Bluetooth)"),
+    .extensions        = "aptxhd",
+    .audio_codec       = AV_CODEC_ID_APTX_HD,
+    .video_codec       = AV_CODEC_ID_NONE,
+    .write_header      = force_one_stream,
+    .write_packet      = ff_raw_write_packet,
+    .flags             = AVFMT_NOTIMESTAMPS,
+};
+#endif
+
 #if CONFIG_CAVSVIDEO_MUXER
 AVOutputFormat ff_cavsvideo_muxer = {
     .name              = "cavsvideo",
@@ -103,6 +129,19 @@ AVOutputFormat ff_cavsvideo_muxer = {
     .flags             = AVFMT_NOTIMESTAMPS,
 };
 #endif
+
+#if CONFIG_CODEC2RAW_MUXER
+AVOutputFormat ff_codec2raw_muxer = {
+    .name              = "codec2raw",
+    .long_name         = NULL_IF_CONFIG_SMALL("raw codec2 muxer"),
+    .audio_codec       = AV_CODEC_ID_CODEC2,
+    .video_codec       = AV_CODEC_ID_NONE,
+    .write_header      = force_one_stream,
+    .write_packet      = ff_raw_write_packet,
+    .flags             = AVFMT_NOTIMESTAMPS,
+};
+#endif
+
 
 #if CONFIG_DATA_MUXER
 AVOutputFormat ff_data_muxer = {
@@ -189,6 +228,30 @@ AVOutputFormat ff_g723_1_muxer = {
     .mime_type         = "audio/g723",
     .extensions        = "tco,rco",
     .audio_codec       = AV_CODEC_ID_G723_1,
+    .video_codec       = AV_CODEC_ID_NONE,
+    .write_header      = force_one_stream,
+    .write_packet      = ff_raw_write_packet,
+    .flags             = AVFMT_NOTIMESTAMPS,
+};
+#endif
+
+#if CONFIG_G726_MUXER
+AVOutputFormat ff_g726_muxer = {
+    .name              = "g726",
+    .long_name         = NULL_IF_CONFIG_SMALL("raw big-endian G.726 (\"left-justified\")"),
+    .audio_codec       = AV_CODEC_ID_ADPCM_G726,
+    .video_codec       = AV_CODEC_ID_NONE,
+    .write_header      = force_one_stream,
+    .write_packet      = ff_raw_write_packet,
+    .flags             = AVFMT_NOTIMESTAMPS,
+};
+#endif
+
+#if CONFIG_G726LE_MUXER
+AVOutputFormat ff_g726le_muxer = {
+    .name              = "g726le",
+    .long_name         = NULL_IF_CONFIG_SMALL("raw little-endian G.726 (\"right-justified\")"),
+    .audio_codec       = AV_CODEC_ID_ADPCM_G726LE,
     .video_codec       = AV_CODEC_ID_NONE,
     .write_header      = force_one_stream,
     .write_packet      = ff_raw_write_packet,
@@ -384,6 +447,19 @@ AVOutputFormat ff_rawvideo_muxer = {
     .extensions        = "yuv,rgb",
     .audio_codec       = AV_CODEC_ID_NONE,
     .video_codec       = AV_CODEC_ID_RAWVIDEO,
+    .write_packet      = ff_raw_write_packet,
+    .flags             = AVFMT_NOTIMESTAMPS,
+};
+#endif
+
+#if CONFIG_SBC_MUXER
+AVOutputFormat ff_sbc_muxer = {
+    .name              = "sbc",
+    .long_name         = NULL_IF_CONFIG_SMALL("raw SBC"),
+    .mime_type         = "audio/x-sbc",
+    .extensions        = "sbc,msbc",
+    .audio_codec       = AV_CODEC_ID_SBC,
+    .write_header      = force_one_stream,
     .write_packet      = ff_raw_write_packet,
     .flags             = AVFMT_NOTIMESTAMPS,
 };

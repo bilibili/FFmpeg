@@ -21,8 +21,10 @@
  */
 
 #include "libavutil/pixdesc.h"
+
+#include "hwaccel.h"
 #include "vaapi_decode.h"
-#include "vp9.h"
+#include "vp9shared.h"
 
 static VASurfaceID vaapi_vp9_surface_id(const VP9Frame *vf)
 {
@@ -166,7 +168,7 @@ static int vaapi_vp9_decode_slice(AVCodecContext *avctx,
     return 0;
 }
 
-AVHWAccel ff_vp9_vaapi_hwaccel = {
+const AVHWAccel ff_vp9_vaapi_hwaccel = {
     .name                 = "vp9_vaapi",
     .type                 = AVMEDIA_TYPE_VIDEO,
     .id                   = AV_CODEC_ID_VP9,
@@ -177,5 +179,7 @@ AVHWAccel ff_vp9_vaapi_hwaccel = {
     .frame_priv_data_size = sizeof(VAAPIDecodePicture),
     .init                 = ff_vaapi_decode_init,
     .uninit               = ff_vaapi_decode_uninit,
+    .frame_params         = ff_vaapi_common_frame_params,
     .priv_data_size       = sizeof(VAAPIDecodeContext),
+    .caps_internal        = HWACCEL_CAP_ASYNC_SAFE,
 };

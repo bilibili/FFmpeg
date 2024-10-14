@@ -512,7 +512,6 @@ static int rtp_read(URLContext *h, uint8_t *buf, int size)
         if (h->flags & AVIO_FLAG_NONBLOCK)
             return AVERROR(EAGAIN);
     }
-    return len;
 }
 
 static int rtp_write(URLContext *h, const uint8_t *buf, int size)
@@ -636,12 +635,6 @@ int ff_rtp_get_local_rtp_port(URLContext *h)
  * @param h media file context
  * @return the local port number
  */
-
-int ff_rtp_get_local_rtcp_port(URLContext *h)
-{
-    RTPContext *s = h->priv_data;
-    return ff_udp_get_local_port(s->rtcp_hd);
-}
 
 static int rtp_get_file_handle(URLContext *h)
 {
