@@ -396,7 +396,8 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         h->rw_timeout = s->rw_timeout;
     }
 
-    hints.ai_family = AF_UNSPEC;
+    //    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET;     // AF_INET 表示只解析 IPv4 地址
     hints.ai_socktype = SOCK_STREAM;
     snprintf(portstr, sizeof(portstr), "%d", port);
     if (s->listen)
