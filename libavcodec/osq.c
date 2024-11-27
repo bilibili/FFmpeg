@@ -21,6 +21,7 @@
 
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "avcodec.h"
 #include "codec_internal.h"
 #include "decode.h"
@@ -159,12 +160,18 @@ static int update_residue_parameter(OSQChannel *cb)
     int rice_k;
 
     sum = cb->sum;
+    if (!sum)
+        return 0;
     x = sum / cb->count;
-    rice_k = av_ceil_log2(x);
+    rice_k = ceil(log2(x));
     if (rice_k >= 30) {
-        rice_k = floor(sum / 1.4426952 + 0.5);
-        if (rice_k < 1)
+        double f = floor(sum / 1.4426952 + 0.5);
+        if (f <= 1) {
             rice_k = 1;
+        } else if (f >= 31) {
+            rice_k = 31;
+        } else
+            rice_k = f;
     }
 
     return rice_k;
@@ -221,8 +228,8 @@ static int osq_channel_parameters(AVCodecContext *avctx, int ch)
 #define C (-3)
 #define D (-4)
 #define E (-5)
-#define P2 ((dst[A] + dst[A]) - dst[B])
-#define P3 ((dst[A] - dst[B]) * 3 + dst[C])
+#define P2 (((unsigned)dst[A] + dst[A]) - dst[B])
+#define P3 (((unsigned)dst[A] - dst[B]) * 3 + dst[C])
 
 static int do_decode(AVCodecContext *avctx, AVFrame *frame, int decorrelate, int downsample)
 {
@@ -272,10 +279,10 @@ static int do_decode(AVCodecContext *avctx, AVFrame *frame, int decorrelate, int
             case 0:
                 break;
             case 1:
-                dst[n] += dst[A];
+                dst[n] += (unsigned)dst[A];
                 break;
             case 2:
-                dst[n] += dst[A] + p;
+                dst[n] += (unsigned)dst[A] + p;
                 break;
             case 3:
                 dst[n] += P2;
@@ -290,28 +297,28 @@ static int do_decode(AVCodecContext *avctx, AVFrame *frame, int decorrelate, int
                 dst[n] += P3 + p;
                 break;
             case 7:
-                dst[n] += (P2 + P3) / 2 + p;
+                dst[n] += (int)(P2 + P3) / 2 + (unsigned)p;
                 break;
             case 8:
-                dst[n] += (P2 + P3) / 2;
+                dst[n] += (int)(P2 + P3) / 2;
                 break;
             case 9:
-                dst[n] += (P2 * 2 + P3) / 3 + p;
+                dst[n] += (int)(P2 * 2 + P3) / 3 + (unsigned)p;
                 break;
             case 10:
-                dst[n] += (P2 + P3 * 2) / 3 + p;
+                dst[n] += (int)(P2 + P3 * 2) / 3 + (unsigned)p;
                 break;
             case 11:
-                dst[n] += (dst[A] + dst[B]) / 2;
+                dst[n] += (int)((unsigned)dst[A] + dst[B]) / 2;
                 break;
             case 12:
-                dst[n] += dst[B];
+                dst[n] += (unsigned)dst[B];
                 break;
             case 13:
-                dst[n] += (dst[D] + dst[B]) / 2;
+                dst[n] += (int)(unsigned)(dst[D] + dst[B]) / 2;
                 break;
             case 14:
-                dst[n] += (P2 + dst[A]) / 2 + p;
+                dst[n] += (int)((unsigned)P2 + dst[A]) / 2 + (unsigned)p;
                 break;
             default:
                 return AVERROR_INVALIDDATA;
@@ -320,7 +327,7 @@ static int do_decode(AVCodecContext *avctx, AVFrame *frame, int decorrelate, int
             cb->prev = prev;
 
             if (downsample)
-                dst[n] *= 256;
+                dst[n] *= 256U;
 
             dst[E] = dst[D];
             dst[D] = dst[C];
@@ -335,7 +342,7 @@ static int do_decode(AVCodecContext *avctx, AVFrame *frame, int decorrelate, int
 
             if (nb_channels == 2 && ch == 1) {
                 if (decorrelate)
-                    dst[n] += s->decode_buffer[0][OFFSET+n];
+                    dst[n] += (unsigned)s->decode_buffer[0][OFFSET+n];
             }
 
             if (downsample)
@@ -351,7 +358,7 @@ static int osq_decode_block(AVCodecContext *avctx, AVFrame *frame)
     const int nb_channels = avctx->ch_layout.nb_channels;
     const int nb_samples = frame->nb_samples;
     OSQContext *s = avctx->priv_data;
-    const int factor = s->factor;
+    const unsigned factor = s->factor;
     int ret, decorrelate, downsample;
     GetBitContext *gb = &s->gb;
 

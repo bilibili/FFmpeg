@@ -346,7 +346,7 @@ static inline void bit_copy(PutBitContext *pb, GetBitContext *gb)
         put_bits(pb, bits_left, get_bits(gb, bits_left));
 }
 
-static av_always_inline void put_block_8x4(int16_t *block, uint8_t *av_restrict p, int stride)
+static av_always_inline void put_block_8x4(int16_t *block, uint8_t *restrict p, int stride)
 {
     int i, j;
 
@@ -637,18 +637,12 @@ static int dvvideo_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     }
 
     if (sys != s->sys) {
-        ret = ff_dv_init_dynamic_tables(s->work_chunks, sys);
-        if (ret < 0) {
-            av_log(avctx, AV_LOG_ERROR, "Error initializing the work tables.\n");
-            return ret;
-        }
+        ff_dv_init_dynamic_tables(s->work_chunks, sys);
         dv_init_weight_tables(s, sys);
         s->sys = sys;
     }
 
     s->frame            = frame;
-    frame->flags |= AV_FRAME_FLAG_KEY;
-    frame->pict_type    = AV_PICTURE_TYPE_I;
     avctx->pix_fmt      = s->sys->pix_fmt;
     avctx->framerate    = av_inv_q(s->sys->time_base);
     avctx->bit_rate     = av_rescale_q(s->sys->frame_size,

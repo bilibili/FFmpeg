@@ -25,6 +25,7 @@
 #include "libavutil/avassert.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/crc.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "lossless_audiodsp.h"
 #include "avcodec.h"
@@ -1286,7 +1287,7 @@ static void predictor_decode_stereo_3950(APEContext *ctx, int count)
                 int32_t left  = a1 - (unsigned)(a0 / 2);
                 int32_t right = left + (unsigned)a0;
 
-                if (FFMAX(FFABS(left), FFABS(right)) > (1<<23)) {
+                if (FFMIN(FFNABS(left), FFNABS(right)) < -(1<<23)) {
                     ctx->interim_mode = !interim_mode;
                     av_log(ctx->avctx, AV_LOG_VERBOSE, "Interim mode: %d\n", ctx->interim_mode);
                     break;
@@ -1737,8 +1738,8 @@ static void ape_flush(AVCodecContext *avctx)
 #define OFFSET(x) offsetof(APEContext, x)
 #define PAR (AV_OPT_FLAG_DECODING_PARAM | AV_OPT_FLAG_AUDIO_PARAM)
 static const AVOption options[] = {
-    { "max_samples", "maximum number of samples decoded per call",             OFFSET(blocks_per_loop), AV_OPT_TYPE_INT,   { .i64 = 4608 },    1,       INT_MAX, PAR, "max_samples" },
-    { "all",         "no maximum. decode all samples for each packet at once", 0,                       AV_OPT_TYPE_CONST, { .i64 = INT_MAX }, INT_MIN, INT_MAX, PAR, "max_samples" },
+    { "max_samples", "maximum number of samples decoded per call",             OFFSET(blocks_per_loop), AV_OPT_TYPE_INT,   { .i64 = 4608 },    1,       INT_MAX, PAR, .unit = "max_samples" },
+    { "all",         "no maximum. decode all samples for each packet at once", 0,                       AV_OPT_TYPE_CONST, { .i64 = INT_MAX }, INT_MIN, INT_MAX, PAR, .unit = "max_samples" },
     { NULL},
 };
 

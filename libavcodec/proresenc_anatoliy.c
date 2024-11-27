@@ -27,6 +27,7 @@
  * Known FOURCCs: 'ap4h' (444), 'apch' (HQ), 'apcn' (422), 'apcs' (LT), 'acpo' (Proxy)
  */
 
+#include "libavutil/mem.h"
 #include "libavutil/mem_internal.h"
 #include "libavutil/opt.h"
 #include "avcodec.h"
@@ -226,107 +227,88 @@ static int int_from_list_or_default(void *ctx, const char *val_name, int val,
     return default_value;
 }
 
-static void encode_codeword(PutBitContext *pb, int val, int codebook)
+static void encode_vlc_codeword(PutBitContext *pb, unsigned codebook, int val)
 {
-    unsigned int rice_order, exp_order, switch_bits, first_exp, exp, zeros;
+    unsigned int rice_order, exp_order, switch_bits, switch_val;
+    int exponent;
 
-    /* number of bits to switch between rice and exp golomb */
-    switch_bits = codebook & 3;
-    rice_order  = codebook >> 5;
-    exp_order   = (codebook >> 2) & 7;
+    /* number of prefix bits to switch between Rice and expGolomb */
+    switch_bits = (codebook & 3) + 1;
+    rice_order  =  codebook >> 5;       /* rice code order */
+    exp_order   = (codebook >> 2) & 7;  /* exp golomb code order */
 
-    first_exp = ((switch_bits + 1) << rice_order);
+    switch_val  = switch_bits << rice_order;
 
-    if (val >= first_exp) { /* exp golomb */
-        val -= first_exp;
-        val += (1 << exp_order);
-        exp = av_log2(val);
-        zeros = exp - exp_order + switch_bits + 1;
-        put_bits(pb, zeros, 0);
-        put_bits(pb, exp + 1, val);
-    } else if (rice_order) {
-        put_bits(pb, (val >> rice_order), 0);
-        put_bits(pb, 1, 1);
-        put_sbits(pb, rice_order, val);
+    if (val >= switch_val) {
+        val -= switch_val - (1 << exp_order);
+        exponent = av_log2(val);
+
+        put_bits(pb, exponent - exp_order + switch_bits, 0);
+        put_bits(pb, exponent + 1, val);
     } else {
-        put_bits(pb, val, 0);
+        exponent = val >> rice_order;
+
+        if (exponent)
+            put_bits(pb, exponent, 0);
         put_bits(pb, 1, 1);
+        if (rice_order)
+            put_sbits(pb, rice_order, val);
     }
 }
 
-#define QSCALE(qmat,ind,val) ((val) / ((qmat)[ind]))
-#define TO_GOLOMB(val) (((val) * 2) ^ ((val) >> 31))
-#define DIFF_SIGN(val, sign) (((val) >> 31) ^ (sign))
-#define IS_NEGATIVE(val) ((((val) >> 31) ^ -1) + 1)
-#define TO_GOLOMB2(val,sign) ((val)==0 ? 0 : ((val) << 1) + (sign))
+#define GET_SIGN(x)  ((x) >> 31)
+#define MAKE_CODE(x) (((x) * 2) ^ GET_SIGN(x))
 
-static av_always_inline int get_level(int val)
+static void encode_dcs(PutBitContext *pb, int16_t *blocks,
+                       int blocks_per_slice, int scale)
 {
-    int sign = (val >> 31);
-    return (val ^ sign) - sign;
-}
+    int i;
+    int codebook = 5, code, dc, prev_dc, delta, sign, new_sign;
 
-#define FIRST_DC_CB 0xB8
+    prev_dc = (blocks[0] - 0x4000) / scale;
+    encode_vlc_codeword(pb, FIRST_DC_CB, MAKE_CODE(prev_dc));
+    sign     = 0;
+    blocks  += 64;
 
-static const uint8_t dc_codebook[7] = { 0x04, 0x28, 0x28, 0x4D, 0x4D, 0x70, 0x70};
-
-static void encode_dc_coeffs(PutBitContext *pb, int16_t *in,
-        int blocks_per_slice, int *qmat)
-{
-    int prev_dc, code;
-    int i, sign, idx;
-    int new_dc, delta, diff_sign, new_code;
-
-    prev_dc = QSCALE(qmat, 0, in[0] - 16384);
-    code = TO_GOLOMB(prev_dc);
-    encode_codeword(pb, code, FIRST_DC_CB);
-
-    code = 5; sign = 0; idx = 64;
-    for (i = 1; i < blocks_per_slice; i++, idx += 64) {
-        new_dc    = QSCALE(qmat, 0, in[idx] - 16384);
-        delta     = new_dc - prev_dc;
-        diff_sign = DIFF_SIGN(delta, sign);
-        new_code  = TO_GOLOMB2(get_level(delta), diff_sign);
-
-        encode_codeword(pb, new_code, dc_codebook[FFMIN(code, 6)]);
-
-        code      = new_code;
-        sign      = delta >> 31;
-        prev_dc   = new_dc;
+    for (i = 1; i < blocks_per_slice; i++, blocks += 64) {
+        dc       = (blocks[0] - 0x4000) / scale;
+        delta    = dc - prev_dc;
+        new_sign = GET_SIGN(delta);
+        delta    = (delta ^ sign) - sign;
+        code     = MAKE_CODE(delta);
+        encode_vlc_codeword(pb, ff_prores_dc_codebook[codebook], code);
+        codebook = FFMIN(code, 6);
+        sign     = new_sign;
+        prev_dc  = dc;
     }
 }
 
-static const uint8_t run_to_cb[16] = { 0x06, 0x06, 0x05, 0x05, 0x04, 0x29,
-        0x29, 0x29, 0x29, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x4C };
-static const uint8_t lev_to_cb[10] = { 0x04, 0x0A, 0x05, 0x06, 0x04, 0x28,
-        0x28, 0x28, 0x28, 0x4C };
-
-static void encode_ac_coeffs(PutBitContext *pb,
-        int16_t *in, int blocks_per_slice, int *qmat, const uint8_t ff_prores_scan[64])
+static void encode_acs(PutBitContext *pb, int16_t *blocks,
+                       int blocks_per_slice,
+                       int *qmat, const uint8_t *scan)
 {
+    int idx, i;
     int prev_run = 4;
     int prev_level = 2;
+    int run = 0, level;
+    int max_coeffs, abs_level;
 
-    int run = 0, level, code, i, j;
+    max_coeffs = blocks_per_slice << 6;
+
     for (i = 1; i < 64; i++) {
-        int indp = ff_prores_scan[i];
-        for (j = 0; j < blocks_per_slice; j++) {
-            int val = QSCALE(qmat, indp, in[(j << 6) + indp]);
-            if (val) {
-                encode_codeword(pb, run, run_to_cb[FFMIN(prev_run, 15)]);
+        for (idx = scan[i]; idx < max_coeffs; idx += 64) {
+            level = blocks[idx] / qmat[scan[i]];
+            if (level) {
+                abs_level = FFABS(level);
+                encode_vlc_codeword(pb, ff_prores_run_to_cb[prev_run], run);
+                encode_vlc_codeword(pb, ff_prores_level_to_cb[prev_level], abs_level - 1);
+                put_sbits(pb, 1, GET_SIGN(level));
 
-                prev_run   = run;
+                prev_run   = FFMIN(run, 15);
+                prev_level = FFMIN(abs_level, 9);
                 run        = 0;
-                level      = get_level(val);
-                code       = level - 1;
-
-                encode_codeword(pb, code, lev_to_cb[FFMIN(prev_level, 9)]);
-
-                prev_level = level;
-
-                put_bits(pb, 1, IS_NEGATIVE(val));
             } else {
-                ++run;
+                run++;
             }
         }
     }
@@ -388,7 +370,7 @@ static void calc_plane_dct(FDCTDSPContext *fdsp, const uint8_t *src, int16_t * b
 }
 
 static int encode_slice_plane(int16_t *blocks, int mb_count, uint8_t *buf, unsigned buf_size, int *qmat, int sub_sample_chroma,
-                              const uint8_t ff_prores_scan[64])
+                              const uint8_t *scan)
 {
     int blocks_per_slice;
     PutBitContext pb;
@@ -396,8 +378,8 @@ static int encode_slice_plane(int16_t *blocks, int mb_count, uint8_t *buf, unsig
     blocks_per_slice = mb_count << (2 - sub_sample_chroma);
     init_put_bits(&pb, buf, buf_size);
 
-    encode_dc_coeffs(&pb, blocks, blocks_per_slice, qmat);
-    encode_ac_coeffs(&pb, blocks, blocks_per_slice, qmat, ff_prores_scan);
+    encode_dcs(&pb, blocks, blocks_per_slice, qmat[0]);
+    encode_acs(&pb, blocks, blocks_per_slice, qmat, scan);
 
     flush_put_bits(&pb);
     return put_bits_ptr(&pb) - pb.buf;
@@ -433,7 +415,7 @@ static void put_alpha_diff(PutBitContext *pb, int cur, int prev)
     const int dsize = 1 << dbits - 1;
     int diff = cur - prev;
 
-    diff = av_mod_uintp2(diff, abits);
+    diff = av_zero_extend(diff, abits);
     if (diff >= (1 << abits) - dsize)
         diff -= 1 << abits;
     if (diff < -dsize || diff > dsize || !diff) {
@@ -486,8 +468,7 @@ static av_always_inline int encode_alpha_slice_data(AVCodecContext *avctx, int8_
             run++;
         }
     } while (idx < num_coeffs);
-    if (run)
-        put_alpha_run(&pb, run);
+    put_alpha_run(&pb, run);
     flush_put_bits(&pb);
     *a_data_size = put_bytes_output(&pb);
 
@@ -753,24 +734,24 @@ static int prores_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     uint8_t *buf;
     int compress_frame_size, pic_size, ret, is_top_field_first = 0;
     uint8_t frame_flags;
-    int frame_size = FFALIGN(avctx->width, 16) * FFALIGN(avctx->height, 16)*16 + 500 + AV_INPUT_BUFFER_MIN_SIZE; //FIXME choose tighter limit
+    int frame_size = FFALIGN(avctx->width, 16) * FFALIGN(avctx->height, 16)*16 + 500 + FF_INPUT_BUFFER_MIN_SIZE; //FIXME choose tighter limit
 
 
-    if ((ret = ff_alloc_packet(avctx, pkt, frame_size + AV_INPUT_BUFFER_MIN_SIZE)) < 0)
+    if ((ret = ff_alloc_packet(avctx, pkt, frame_size + FF_INPUT_BUFFER_MIN_SIZE)) < 0)
         return ret;
 
     buf = pkt->data;
     compress_frame_size = 8 + header_size;
 
     bytestream_put_be32(&buf, compress_frame_size);/* frame size will be update after picture(s) encoding */
-    bytestream_put_buffer(&buf, "icpf", 4);
+    bytestream_put_be32(&buf, FRAME_ID);
 
     bytestream_put_be16(&buf, header_size);
-    bytestream_put_be16(&buf, 0); /* version */
+    bytestream_put_be16(&buf, avctx->pix_fmt != AV_PIX_FMT_YUV422P10 || ctx->need_alpha ? 1 : 0); /* version */
     bytestream_put_buffer(&buf, ctx->vendor, 4);
     bytestream_put_be16(&buf, avctx->width);
     bytestream_put_be16(&buf, avctx->height);
-    frame_flags = 0x82; /* 422 not interlaced */
+    frame_flags = 0x80; /* 422 not interlaced */
     if (avctx->profile >= AV_PROFILE_PRORES_4444) /* 4444 or 4444 Xq */
         frame_flags |= 0x40; /* 444 chroma */
     if (ctx->is_interlaced) {
@@ -795,15 +776,7 @@ static int prores_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                                       pict->color_trc, valid_trc, 0);
     *buf++ = int_from_list_or_default(avctx, "frame colorspace",
                                       pict->colorspace, valid_colorspace, 0);
-    if (avctx->profile >= AV_PROFILE_PRORES_4444) {
-        if (avctx->pix_fmt == AV_PIX_FMT_YUV444P10) {
-            *buf++ = 0xA0;/* src b64a and no alpha */
-        } else {
-            *buf++ = 0xA2;/* src b64a and 16b alpha */
-        }
-    } else {
-        *buf++ = 32;/* src v210 and no alpha */
-    }
+    *buf++ = ctx->need_alpha ? 0x2 /* 16-bit alpha */ : 0;
     *buf++ = 0; /* reserved */
     *buf++ = 3; /* luma and chroma matrix present */
 
@@ -884,7 +857,8 @@ static av_cold int prores_encode_init(AVCodecContext *avctx)
             avctx->profile = AV_PROFILE_PRORES_4444;
             av_log(avctx, AV_LOG_INFO,
                    "encoding with ProRes 4444+ (ap4h) profile\n");
-        }
+        } else
+            av_assert0(0);
     } else if (avctx->profile < AV_PROFILE_PRORES_PROXY
             || avctx->profile > AV_PROFILE_PRORES_XQ) {
         av_log(
@@ -929,6 +903,9 @@ static av_cold int prores_encode_init(AVCodecContext *avctx)
                 return AVERROR(ENOMEM);
         }
     }
+
+    if (ctx->need_alpha)
+        avctx->bits_per_coded_sample = 32;
 
     ff_fdctdsp_init(&ctx->fdsp, avctx);
 
@@ -979,6 +956,7 @@ const FFCodec ff_prores_aw_encoder = {
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS |
                       AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
     .p.pix_fmts     = pix_fmts,
+    .color_ranges   = AVCOL_RANGE_MPEG,
     .priv_data_size = sizeof(ProresContext),
     .init           = prores_encode_init,
     .close          = prores_encode_close,
@@ -996,6 +974,7 @@ const FFCodec ff_prores_encoder = {
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS |
                       AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
     .p.pix_fmts     = pix_fmts,
+    .color_ranges   = AVCOL_RANGE_MPEG,
     .priv_data_size = sizeof(ProresContext),
     .init           = prores_encode_init,
     .close          = prores_encode_close,

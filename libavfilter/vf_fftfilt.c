@@ -24,11 +24,11 @@
  * FFT domain filtering.
  */
 
-#include "internal.h"
+#include "filters.h"
 #include "video.h"
 #include "libavutil/common.h"
 #include "libavutil/cpu.h"
-#include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/tx.h"
@@ -96,7 +96,7 @@ static const AVOption fftfilt_options[] = {
     { "weight_Y", "set luminance expression in Y plane",   OFFSET(weight_str[Y]), AV_OPT_TYPE_STRING, {.str = "1"}, 0, 0, FLAGS },
     { "weight_U", "set chrominance expression in U plane", OFFSET(weight_str[U]), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS },
     { "weight_V", "set chrominance expression in V plane", OFFSET(weight_str[V]), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS },
-    { "eval", "specify when to evaluate expressions", OFFSET(eval_mode), AV_OPT_TYPE_INT, {.i64 = EVAL_MODE_INIT}, 0, EVAL_MODE_NB-1, FLAGS, "eval" },
+    { "eval", "specify when to evaluate expressions", OFFSET(eval_mode), AV_OPT_TYPE_INT, {.i64 = EVAL_MODE_INIT}, 0, EVAL_MODE_NB-1, FLAGS, .unit = "eval" },
          { "init",  "eval expressions once during initialization", 0, AV_OPT_TYPE_CONST, {.i64=EVAL_MODE_INIT},  .flags = FLAGS, .unit = "eval" },
          { "frame", "eval expressions per-frame",                  0, AV_OPT_TYPE_CONST, {.i64=EVAL_MODE_FRAME}, .flags = FLAGS, .unit = "eval" },
     {NULL},
@@ -284,10 +284,11 @@ static av_cold int initialize(AVFilterContext *ctx)
 
 static void do_eval(FFTFILTContext *s, AVFilterLink *inlink, int plane)
 {
+    FilterLink *l = ff_filter_link(inlink);
     double values[VAR_VARS_NB];
     int i, j;
 
-    values[VAR_N] = inlink->frame_count_out;
+    values[VAR_N] = l->frame_count_out;
     values[VAR_W] = s->planewidth[plane];
     values[VAR_H] = s->planeheight[plane];
     values[VAR_WS] = s->rdft_hlen[plane];
@@ -382,11 +383,9 @@ static int config_props(AVFilterLink *inlink)
     if (s->depth <= 8) {
         s->rdft_horizontal = rdft_horizontal8;
         s->irdft_horizontal = irdft_horizontal8;
-    } else if (s->depth > 8) {
+    } else {
         s->rdft_horizontal = rdft_horizontal16;
         s->irdft_horizontal = irdft_horizontal16;
-    } else {
-        return AVERROR_BUG;
     }
     return 0;
 }

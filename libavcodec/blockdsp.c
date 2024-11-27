@@ -63,12 +63,12 @@ av_cold void ff_blockdsp_init(BlockDSPContext *c)
     c->fill_block_tab[0] = fill_block16_c;
     c->fill_block_tab[1] = fill_block8_c;
 
-#if ARCH_ALPHA
-    ff_blockdsp_init_alpha(c);
-#elif ARCH_ARM
+#if ARCH_ARM
     ff_blockdsp_init_arm(c);
 #elif ARCH_PPC
     ff_blockdsp_init_ppc(c);
+#elif ARCH_RISCV
+    ff_blockdsp_init_riscv(c);
 #elif ARCH_X86
     ff_blockdsp_init_x86(c);
 #elif ARCH_MIPS

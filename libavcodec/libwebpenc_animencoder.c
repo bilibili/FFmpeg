@@ -25,8 +25,8 @@
  */
 
 #include "libavutil/buffer.h"
+#include "libavutil/mem.h"
 
-#include "config.h"
 #include "codec_internal.h"
 #include "encode.h"
 #include "libwebpenc_common.h"
@@ -39,9 +39,6 @@ typedef struct LibWebPAnimContext {
     int64_t first_frame_pts;  // pts of the first encoded frame.
     int64_t end_pts;          // pts + duration of the last frame
 
-#if FF_API_REORDERED_OPAQUE
-    int64_t         reordered_opaque;
-#endif
     void           *first_frame_opaque;
     AVBufferRef    *first_frame_opaque_ref;
 
@@ -92,11 +89,6 @@ static int libwebp_anim_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                 if (pkt->pts != AV_NOPTS_VALUE && s->end_pts > pkt->pts)
                     pkt->duration = s->end_pts - pkt->pts;
 
-#if FF_API_REORDERED_OPAQUE
-FF_DISABLE_DEPRECATION_WARNINGS
-                avctx->reordered_opaque = s->reordered_opaque;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
                 if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) {
                     pkt->opaque               = s->first_frame_opaque;
                     pkt->opaque_ref           = s->first_frame_opaque_ref;
@@ -134,11 +126,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
 
         if (!avctx->frame_num) {
             s->first_frame_pts = frame->pts;
-#if FF_API_REORDERED_OPAQUE
-FF_DISABLE_DEPRECATION_WARNINGS
-            s->reordered_opaque = frame->reordered_opaque;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
 
             if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) {
                 s->first_frame_opaque = frame->opaque;
@@ -181,6 +168,7 @@ const FFCodec ff_libwebp_anim_encoder = {
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
                       AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
     .p.pix_fmts     = ff_libwebpenc_pix_fmts,
+    .color_ranges   = AVCOL_RANGE_MPEG,
     .p.priv_class   = &ff_libwebpenc_class,
     .p.wrapper_name = "libwebp",
     .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE,

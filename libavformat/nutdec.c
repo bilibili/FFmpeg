@@ -26,6 +26,7 @@
 #include "libavutil/dict.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/mathematics.h"
+#include "libavutil/mem.h"
 #include "libavutil/tree.h"
 #include "libavcodec/bytestream.h"
 #include "avio_internal.h"
@@ -880,8 +881,6 @@ static int read_sm_data(AVFormatContext *s, AVIOContext *bc, AVPacket *pkt, int 
     int count = ffio_read_varlen(bc);
     int skip_start = 0;
     int skip_end = 0;
-    int channels = 0;
-    int64_t channel_layout = 0;
     int sample_rate = 0;
     int width = 0;
     int height = 0;
@@ -929,7 +928,7 @@ static int read_sm_data(AVFormatContext *s, AVIOContext *bc, AVPacket *pkt, int 
                 AV_WB64(dst, v64);
                 dst += 8;
             } else if (!strcmp(name, "ChannelLayout") && value_len == 8) {
-                channel_layout = avio_rl64(bc);
+                // Ignored
                 continue;
             } else {
                 av_log(s, AV_LOG_WARNING, "Unknown data %s / %s\n", name, type_str);
@@ -951,7 +950,7 @@ static int read_sm_data(AVFormatContext *s, AVIOContext *bc, AVPacket *pkt, int 
             } else if (!strcmp(name, "SkipEnd")) {
                 skip_end = value;
             } else if (!strcmp(name, "Channels")) {
-                channels = value;
+                // Ignored
             } else if (!strcmp(name, "SampleRate")) {
                 sample_rate = value;
             } else if (!strcmp(name, "Width")) {
@@ -964,22 +963,14 @@ static int read_sm_data(AVFormatContext *s, AVIOContext *bc, AVPacket *pkt, int 
         }
     }
 
-    if (channels || channel_layout || sample_rate || width || height) {
-        uint8_t *dst = av_packet_new_side_data(pkt, AV_PKT_DATA_PARAM_CHANGE, 28);
+    if (sample_rate || width || height) {
+        uint8_t *dst = av_packet_new_side_data(pkt, AV_PKT_DATA_PARAM_CHANGE, 16);
         if (!dst)
             return AVERROR(ENOMEM);
         bytestream_put_le32(&dst,
-#if FF_API_OLD_CHANNEL_LAYOUT
-                            AV_SIDE_DATA_PARAM_CHANGE_CHANNEL_COUNT*(!!channels) +
-                            AV_SIDE_DATA_PARAM_CHANGE_CHANNEL_LAYOUT*(!!channel_layout) +
-#endif
                             AV_SIDE_DATA_PARAM_CHANGE_SAMPLE_RATE*(!!sample_rate) +
                             AV_SIDE_DATA_PARAM_CHANGE_DIMENSIONS*(!!(width|height))
                            );
-        if (channels)
-            bytestream_put_le32(&dst, channels);
-        if (channel_layout)
-            bytestream_put_le64(&dst, channel_layout);
         if (sample_rate)
             bytestream_put_le32(&dst, sample_rate);
         if (width || height){
@@ -1310,17 +1301,17 @@ static int read_seek(AVFormatContext *s, int stream_index,
     return 0;
 }
 
-const AVInputFormat ff_nut_demuxer = {
-    .name           = "nut",
-    .long_name      = NULL_IF_CONFIG_SMALL("NUT"),
-    .flags          = AVFMT_SEEK_TO_PTS,
+const FFInputFormat ff_nut_demuxer = {
+    .p.name         = "nut",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("NUT"),
+    .p.flags        = AVFMT_SEEK_TO_PTS,
+    .p.extensions   = "nut",
+    .p.codec_tag    = ff_nut_codec_tags,
     .priv_data_size = sizeof(NUTContext),
-    .flags_internal = FF_FMT_INIT_CLEANUP,
+    .flags_internal = FF_INFMT_FLAG_INIT_CLEANUP,
     .read_probe     = nut_probe,
     .read_header    = nut_read_header,
     .read_packet    = nut_read_packet,
     .read_close     = nut_read_close,
     .read_seek      = read_seek,
-    .extensions     = "nut",
-    .codec_tag      = ff_nut_codec_tags,
 };

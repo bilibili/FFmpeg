@@ -27,7 +27,7 @@
 #include "libavutil/opt.h"
 #include "avfilter.h"
 #include "dnn_filter_common.h"
-#include "internal.h"
+#include "filters.h"
 #include "video.h"
 
 typedef struct DRContext {
@@ -39,20 +39,17 @@ typedef struct DRContext {
 #define OFFSET(x) offsetof(DRContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption derain_options[] = {
-    { "filter_type", "filter type(derain/dehaze)",  OFFSET(filter_type),    AV_OPT_TYPE_INT,    { .i64 = 0 },    0, 1, FLAGS, "type" },
-    { "derain",      "derain filter flag",          0,                      AV_OPT_TYPE_CONST,  { .i64 = 0 },    0, 0, FLAGS, "type" },
-    { "dehaze",      "dehaze filter flag",          0,                      AV_OPT_TYPE_CONST,  { .i64 = 1 },    0, 0, FLAGS, "type" },
-    { "dnn_backend", "DNN backend",                 OFFSET(dnnctx.backend_type),   AV_OPT_TYPE_INT,    { .i64 = 1 },    0, 1, FLAGS, "backend" },
+    { "filter_type", "filter type(derain/dehaze)",  OFFSET(filter_type),    AV_OPT_TYPE_INT,    { .i64 = 0 },    0, 1, FLAGS, .unit = "type" },
+    { "derain",      "derain filter flag",          0,                      AV_OPT_TYPE_CONST,  { .i64 = 0 },    0, 0, FLAGS, .unit = "type" },
+    { "dehaze",      "dehaze filter flag",          0,                      AV_OPT_TYPE_CONST,  { .i64 = 1 },    0, 0, FLAGS, .unit = "type" },
+    { "dnn_backend", "DNN backend",                 OFFSET(dnnctx.backend_type),   AV_OPT_TYPE_INT,    { .i64 = 1 },    0, 1, FLAGS, .unit = "backend" },
 #if (CONFIG_LIBTENSORFLOW == 1)
-    { "tensorflow",  "tensorflow backend flag",     0,                      AV_OPT_TYPE_CONST,  { .i64 = 1 },    0, 0, FLAGS, "backend" },
+    { "tensorflow",  "tensorflow backend flag",     0,                      AV_OPT_TYPE_CONST,  { .i64 = 1 },    0, 0, FLAGS, .unit = "backend" },
 #endif
-    { "model",       "path to model file",          OFFSET(dnnctx.model_filename),   AV_OPT_TYPE_STRING,    { .str = NULL }, 0, 0, FLAGS },
-    { "input",       "input name of the model",     OFFSET(dnnctx.model_inputname),  AV_OPT_TYPE_STRING,    { .str = "x" },  0, 0, FLAGS },
-    { "output",      "output name of the model",    OFFSET(dnnctx.model_outputnames_string), AV_OPT_TYPE_STRING,    { .str = "y" },  0, 0, FLAGS },
     { NULL }
 };
 
-AVFILTER_DEFINE_CLASS(derain);
+AVFILTER_DNN_DEFINE_CLASS(derain, DNN_TF);
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
@@ -113,6 +110,7 @@ const AVFilter ff_vf_derain = {
     .name          = "derain",
     .description   = NULL_IF_CONFIG_SMALL("Apply derain filter to the input."),
     .priv_size     = sizeof(DRContext),
+    .preinit       = ff_dnn_filter_init_child_class,
     .init          = init,
     .uninit        = uninit,
     FILTER_INPUTS(derain_inputs),

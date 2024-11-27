@@ -54,7 +54,7 @@ static void ac3_exponent_min_c(uint8_t *exp, int num_reuse_blocks, int nb_coefs)
     }
 }
 
-static void float_to_fixed24_c(int32_t *dst, const float *src, unsigned int len)
+static void float_to_fixed24_c(int32_t *dst, const float *src, size_t len)
 {
     const float scale = 1 << 24;
     do {
@@ -389,7 +389,9 @@ av_cold void ff_ac3dsp_init(AC3DSPContext *c)
     c->downmix               = NULL;
     c->downmix_fixed         = NULL;
 
-#if ARCH_ARM
+#if ARCH_AARCH64
+    ff_ac3dsp_init_aarch64(c);
+#elif ARCH_ARM
     ff_ac3dsp_init_arm(c);
 #elif ARCH_X86
     ff_ac3dsp_init_x86(c);

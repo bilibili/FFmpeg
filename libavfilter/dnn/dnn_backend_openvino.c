@@ -27,10 +27,10 @@
 #include "libavformat/avio.h"
 #include "libavutil/avassert.h"
 #include "libavutil/cpu.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/avstring.h"
 #include "libavutil/detection_bbox.h"
-#include "../internal.h"
 #include "safe_queue.h"
 #if HAVE_OPENVINO2
 #include <openvino/c/openvino.h>
@@ -39,32 +39,16 @@
 #endif
 #include "dnn_backend_common.h"
 
-typedef struct OVOptions{
-    char *device_type;
-    int nireq;
-    uint8_t async;
-    int batch_size;
-    int input_resizable;
-    DNNLayout layout;
-    float scale;
-    float mean;
-} OVOptions;
-
-typedef struct OVContext {
-    const AVClass *class;
-    OVOptions options;
-} OVContext;
-
 typedef struct OVModel{
-    OVContext ctx;
-    DNNModel *model;
+    DNNModel model;
+    DnnContext *ctx;
 #if HAVE_OPENVINO2
     ov_core_t *core;
     ov_model_t *ov_model;
     ov_compiled_model_t *compiled_model;
     ov_output_const_port_t* input_port;
     ov_preprocess_input_info_t* input_info;
-    ov_output_const_port_t* output_port;
+    ov_output_const_port_t** output_ports;
     ov_preprocess_output_info_t* output_info;
     ov_preprocess_prepostprocessor_t* preprocess;
 #else
@@ -77,6 +61,7 @@ typedef struct OVModel{
     SafeQueue *request_queue;   // holds OVRequestItem
     Queue *task_queue;          // holds TaskItem
     Queue *lltask_queue;     // holds LastLevelTaskItem
+    int nb_outputs;
 } OVModel;
 
 // one request for one call to openvino
@@ -96,23 +81,19 @@ typedef struct OVRequestItem {
     generated_string = generated_string ? av_asprintf("%s %s", generated_string, iterate_string) : \
                                           av_asprintf("%s", iterate_string);
 
-#define OFFSET(x) offsetof(OVContext, x)
+#define OFFSET(x) offsetof(OVOptions, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM
 static const AVOption dnn_openvino_options[] = {
-    { "device", "device to run model", OFFSET(options.device_type), AV_OPT_TYPE_STRING, { .str = "CPU" }, 0, 0, FLAGS },
-    DNN_BACKEND_COMMON_OPTIONS
-    { "batch_size",  "batch size per request", OFFSET(options.batch_size),  AV_OPT_TYPE_INT,    { .i64 = 1 },     1, 1000, FLAGS},
-    { "input_resizable", "can input be resizable or not", OFFSET(options.input_resizable), AV_OPT_TYPE_BOOL,   { .i64 = 0 },     0, 1, FLAGS },
-    { "layout", "input layout of model", OFFSET(options.layout), AV_OPT_TYPE_INT, { .i64 = DL_NONE}, DL_NONE, DL_NHWC, FLAGS, "layout" },
-        { "none",  "none", 0, AV_OPT_TYPE_CONST, { .i64 = DL_NONE }, 0, 0, FLAGS, "layout"},
-        { "nchw",  "nchw", 0, AV_OPT_TYPE_CONST, { .i64 = DL_NCHW }, 0, 0, FLAGS, "layout"},
-        { "nhwc",  "nhwc", 0, AV_OPT_TYPE_CONST, { .i64 = DL_NHWC }, 0, 0, FLAGS, "layout"},
-    { "scale", "Add scale preprocess operation. Divide each element of input by specified value.", OFFSET(options.scale), AV_OPT_TYPE_FLOAT, { .dbl = 0 }, INT_MIN, INT_MAX, FLAGS},
-    { "mean",  "Add mean preprocess operation. Subtract specified value from each element of input.", OFFSET(options.mean),  AV_OPT_TYPE_FLOAT, { .dbl = 0 }, INT_MIN, INT_MAX, FLAGS},
+    { "batch_size",  "batch size per request", OFFSET(batch_size),  AV_OPT_TYPE_INT,    { .i64 = 1 },     1, 1000, FLAGS},
+    { "input_resizable", "can input be resizable or not", OFFSET(input_resizable), AV_OPT_TYPE_BOOL,   { .i64 = 0 },     0, 1, FLAGS },
+    { "layout", "input layout of model", OFFSET(layout), AV_OPT_TYPE_INT, { .i64 = DL_NONE}, DL_NONE, DL_NHWC, FLAGS, .unit = "layout" },
+        { "none",  "none", 0, AV_OPT_TYPE_CONST, { .i64 = DL_NONE }, 0, 0, FLAGS, .unit = "layout"},
+        { "nchw",  "nchw", 0, AV_OPT_TYPE_CONST, { .i64 = DL_NCHW }, 0, 0, FLAGS, .unit = "layout"},
+        { "nhwc",  "nhwc", 0, AV_OPT_TYPE_CONST, { .i64 = DL_NHWC }, 0, 0, FLAGS, .unit = "layout"},
+    { "scale", "Add scale preprocess operation. Divide each element of input by specified value.", OFFSET(scale), AV_OPT_TYPE_FLOAT, { .dbl = 0 }, INT_MIN, INT_MAX, FLAGS},
+    { "mean",  "Add mean preprocess operation. Subtract specified value from each element of input.", OFFSET(mean),  AV_OPT_TYPE_FLOAT, { .dbl = 0 }, INT_MIN, INT_MAX, FLAGS},
     { NULL }
 };
-
-AVFILTER_DEFINE_CLASS(dnn_openvino);
 
 #if HAVE_OPENVINO2
 static const struct {
@@ -197,14 +178,14 @@ static int fill_model_input_ov(OVModel *ov_model, OVRequestItem *request)
     DNNData input;
     LastLevelTaskItem *lltask;
     TaskItem *task;
-    OVContext *ctx = &ov_model->ctx;
+    DnnContext *ctx = ov_model->ctx;
 #if HAVE_OPENVINO2
     int64_t* dims;
     ov_status_e status;
     ov_tensor_t* tensor = NULL;
     ov_shape_t input_shape = {0};
     ov_element_type_e precision;
-    void *input_data_ptr = NULL;
+    char *port_name;
 #else
     dimensions_t dims;
     precision_e precision;
@@ -219,42 +200,43 @@ static int fill_model_input_ov(OVModel *ov_model, OVRequestItem *request)
     task = lltask->task;
 
 #if HAVE_OPENVINO2
-    if (!ov_model_is_dynamic(ov_model->ov_model)) {
-        if (ov_model->input_port) {
-            ov_output_const_port_free(ov_model->input_port);
-            ov_model->input_port = NULL;
-        }
+    if (ov_model->input_port) {
+        ov_output_const_port_free(ov_model->input_port);
+        ov_model->input_port = NULL;
+    }
+    if (task->input_name)
         status = ov_model_const_input_by_name(ov_model->ov_model, task->input_name, &ov_model->input_port);
-        if (status != OK) {
-            av_log(ctx, AV_LOG_ERROR, "Failed to get input port shape.\n");
-            return ov2_map_error(status, NULL);
-        }
-        status = ov_const_port_get_shape(ov_model->input_port, &input_shape);
-        if (status != OK) {
-            av_log(ctx, AV_LOG_ERROR, "Failed to get input port shape.\n");
-            return ov2_map_error(status, NULL);
-        }
-        dims = input_shape.dims;
-        status = ov_port_get_element_type(ov_model->input_port, &precision);
-        if (status != OK) {
-            av_log(ctx, AV_LOG_ERROR, "Failed to get input port data type.\n");
-            ov_shape_free(&input_shape);
-            return ov2_map_error(status, NULL);
-        }
-    } else {
-        avpriv_report_missing_feature(ctx, "Do not support dynamic model.");
-        return AVERROR(ENOSYS);
+    else
+        status = ov_model_const_input(ov_model->ov_model, &ov_model->input_port);
+    if (status != OK) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get input port shape.\n");
+        return ov2_map_error(status, NULL);
     }
-    input.height = dims[1];
-    input.width = dims[2];
-    input.channels = dims[3];
-    input.dt = precision_to_datatype(precision);
-    input.data = av_malloc(input.height * input.width * input.channels * get_datatype_size(input.dt));
-    if (!input.data) {
+    status = ov_port_get_any_name(ov_model->input_port, &port_name);
+    if (status != OK) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get input port name.\n");
+        return ov2_map_error(status, NULL);
+    }
+    av_log(ctx, AV_LOG_VERBOSE, "OpenVINO model input: %s\n", port_name);
+    ov_free(port_name);
+    port_name = NULL;
+
+    status = ov_const_port_get_shape(ov_model->input_port, &input_shape);
+    if (status != OK) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get input port shape.\n");
+        return ov2_map_error(status, NULL);
+    }
+    dims = input_shape.dims;
+    status = ov_port_get_element_type(ov_model->input_port, &precision);
+    if (status != OK) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get input port data type.\n");
         ov_shape_free(&input_shape);
-        return AVERROR(ENOMEM);
+        return ov2_map_error(status, NULL);
     }
-    input_data_ptr = input.data;
+    for (int i = 0; i < input_shape.rank; i++)
+        input.dims[i] = dims[i];
+    input.layout = DL_NHWC;
+    input.dt = precision_to_datatype(precision);
 #else
     status = ie_infer_request_get_blob(request->infer_request, task->input_name, &input_blob);
     if (status != OK) {
@@ -276,9 +258,9 @@ static int fill_model_input_ov(OVModel *ov_model, OVRequestItem *request)
         av_log(ctx, AV_LOG_ERROR, "Failed to get input blob buffer\n");
         return DNN_GENERIC_ERROR;
     }
-    input.height = dims.dims[2];
-    input.width = dims.dims[3];
-    input.channels = dims.dims[1];
+    for (int i = 0; i < input_shape.rank; i++)
+        input.dims[i] = dims[i];
+    input.layout = DL_NCHW;
     input.data = blob_buffer.buffer;
     input.dt = precision_to_datatype(precision);
 #endif
@@ -289,7 +271,7 @@ static int fill_model_input_ov(OVModel *ov_model, OVRequestItem *request)
     input.scale = 1;
     input.mean = 0;
 
-    for (int i = 0; i < ctx->options.batch_size; ++i) {
+    for (int i = 0; i < ctx->ov_option.batch_size; ++i) {
         lltask = ff_queue_pop_front(ov_model->lltask_queue);
         if (!lltask) {
             break;
@@ -297,11 +279,31 @@ static int fill_model_input_ov(OVModel *ov_model, OVRequestItem *request)
         request->lltasks[i] = lltask;
         request->lltask_count = i + 1;
         task = lltask->task;
-        switch (ov_model->model->func_type) {
+#if HAVE_OPENVINO2
+        if (tensor)
+            ov_tensor_free(tensor);
+        status = ov_tensor_create(precision, input_shape, &tensor);
+        ov_shape_free(&input_shape);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to create tensor from host prt.\n");
+            return ov2_map_error(status, NULL);
+        }
+        status = ov_tensor_data(tensor, &input.data);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to get input data.\n");
+            return ov2_map_error(status, NULL);
+        }
+        status = ov_infer_request_set_input_tensor(request->infer_request, tensor);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to Set an input tensor for the model.\n");
+            return ov2_map_error(status, NULL);
+        }
+#endif
+        switch (ov_model->model.func_type) {
         case DFT_PROCESS_FRAME:
             if (task->do_ioproc) {
-                if (ov_model->model->frame_pre_proc != NULL) {
-                    ov_model->model->frame_pre_proc(task->in_frame, &input, ov_model->model->filter_ctx);
+                if (ov_model->model.frame_pre_proc != NULL) {
+                    ov_model->model.frame_pre_proc(task->in_frame, &input, ov_model->model.filter_ctx);
                 } else {
                     ff_proc_from_frame_to_dnn(task->in_frame, &input, ctx);
                 }
@@ -317,24 +319,11 @@ static int fill_model_input_ov(OVModel *ov_model, OVRequestItem *request)
             av_assert0(!"should not reach here");
             break;
         }
-#if HAVE_OPENVINO2
-        status = ov_tensor_create_from_host_ptr(precision, input_shape, input.data, &tensor);
-        ov_shape_free(&input_shape);
-        if (status != OK) {
-            av_log(ctx, AV_LOG_ERROR, "Failed to create tensor from host prt.\n");
-            return ov2_map_error(status, NULL);
-        }
-        status = ov_infer_request_set_input_tensor(request->infer_request, tensor);
-        if (status != OK) {
-            av_log(ctx, AV_LOG_ERROR, "Failed to Set an input tensor for the model.\n");
-            return ov2_map_error(status, NULL);
-        }
-#endif
-        input.data = (uint8_t *)input.data
-                     + input.width * input.height * input.channels * get_datatype_size(input.dt);
+        input.data = (uint8_t *)input.data +
+            input.dims[1] * input.dims[2] * input.dims[3] * get_datatype_size(input.dt);
     }
 #if HAVE_OPENVINO2
-    av_freep(&input_data_ptr);
+    ov_tensor_free(tensor);
 #else
     ie_blob_free(&input_blob);
 #endif
@@ -349,8 +338,8 @@ static void infer_completion_callback(void *args)
     TaskItem *task = lltask->task;
     OVModel *ov_model = task->model;
     SafeQueue *requestq = ov_model->request_queue;
-    DNNData output;
-    OVContext *ctx = &ov_model->ctx;
+    DNNData *outputs;
+    DnnContext *ctx = ov_model->ctx;
 #if HAVE_OPENVINO2
     size_t* dims;
     ov_status_e status;
@@ -358,45 +347,62 @@ static void infer_completion_callback(void *args)
     ov_shape_t output_shape = {0};
     ov_element_type_e precision;
 
-    memset(&output, 0, sizeof(output));
-    status = ov_infer_request_get_output_tensor_by_index(request->infer_request, 0, &output_tensor);
-    if (status != OK) {
-        av_log(ctx, AV_LOG_ERROR,
-               "Failed to get output tensor.");
+    outputs = av_calloc(ov_model->nb_outputs, sizeof(*outputs));
+    if (!outputs) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to alloc outputs.");
         return;
     }
 
-    status = ov_tensor_data(output_tensor, &output.data);
-    if (status != OK) {
-        av_log(ctx, AV_LOG_ERROR,
-               "Failed to get output data.");
-        return;
-    }
+    for (int i = 0; i < ov_model->nb_outputs; i++) {
+        status = ov_infer_request_get_tensor_by_const_port(request->infer_request,
+                                                           ov_model->output_ports[i],
+                                                           &output_tensor);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR,
+                "Failed to get output tensor.");
+            goto end;
+        }
 
-    status = ov_tensor_get_shape(output_tensor, &output_shape);
-    if (status != OK) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to get output port shape.\n");
-        return;
-    }
-    dims = output_shape.dims;
+        status = ov_tensor_data(output_tensor, &outputs[i].data);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR,
+                "Failed to get output data.");
+            goto end;
+        }
 
-    status = ov_port_get_element_type(ov_model->output_port, &precision);
-    if (status != OK) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to get output port data type.\n");
+        status = ov_tensor_get_shape(output_tensor, &output_shape);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to get output port shape.\n");
+            goto end;
+        }
+        dims = output_shape.dims;
+
+        status = ov_port_get_element_type(ov_model->output_ports[i], &precision);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to get output port data type.\n");
+            goto end;
+        }
+        outputs[i].dt       = precision_to_datatype(precision);
+        outputs[i].layout   = DL_NCHW;
+        outputs[i].dims[0]  = 1;
+        outputs[i].dims[1]  = output_shape.rank > 2 ? dims[output_shape.rank - 3] : 1;
+        outputs[i].dims[2]  = output_shape.rank > 1 ? dims[output_shape.rank - 2] : 1;
+        outputs[i].dims[3]  = output_shape.rank > 0 ? dims[output_shape.rank - 1] : 1;
+        av_assert0(request->lltask_count <= dims[0]);
+        outputs[i].layout   = ctx->ov_option.layout;
+        outputs[i].scale    = ctx->ov_option.scale;
+        outputs[i].mean     = ctx->ov_option.mean;
         ov_shape_free(&output_shape);
-        return;
+        ov_tensor_free(output_tensor);
+        output_tensor = NULL;
     }
-    output.channels = dims[1];
-    output.height   = dims[2];
-    output.width    = dims[3];
-    av_assert0(request->lltask_count <= dims[0]);
-    ov_shape_free(&output_shape);
 #else
     IEStatusCode status;
     dimensions_t dims;
     ie_blob_t *output_blob = NULL;
     ie_blob_buffer_t blob_buffer;
     precision_e precision;
+    DNNData output;
     status = ie_infer_request_get_blob(request->infer_request, task->output_names[0], &output_blob);
     if (status != OK) {
         av_log(ctx, AV_LOG_ERROR,
@@ -420,46 +426,54 @@ static void infer_completion_callback(void *args)
         return;
     }
     output.data     = blob_buffer.buffer;
-    output.channels = dims.dims[1];
-    output.height   = dims.dims[2];
-    output.width    = dims.dims[3];
+    output.layout   = DL_NCHW;
+    for (int i = 0; i < 4; i++)
+        output.dims[i] = dims.dims[i];
     av_assert0(request->lltask_count <= dims.dims[0]);
-#endif
     output.dt       = precision_to_datatype(precision);
-    output.layout   = ctx->options.layout;
-    output.scale    = ctx->options.scale;
-    output.mean     = ctx->options.mean;
+    output.layout   = ctx->ov_option.layout;
+    output.scale    = ctx->ov_option.scale;
+    output.mean     = ctx->ov_option.mean;
+    outputs = &output;
+#endif
 
     av_assert0(request->lltask_count >= 1);
     for (int i = 0; i < request->lltask_count; ++i) {
         task = request->lltasks[i]->task;
 
-        switch (ov_model->model->func_type) {
+        switch (ov_model->model.func_type) {
         case DFT_PROCESS_FRAME:
             if (task->do_ioproc) {
-                if (ov_model->model->frame_post_proc != NULL) {
-                    ov_model->model->frame_post_proc(task->out_frame, &output, ov_model->model->filter_ctx);
+                if (ov_model->model.frame_post_proc != NULL) {
+                    ov_model->model.frame_post_proc(task->out_frame, outputs, ov_model->model.filter_ctx);
                 } else {
-                    ff_proc_from_dnn_to_frame(task->out_frame, &output, ctx);
+                    ff_proc_from_dnn_to_frame(task->out_frame, outputs, ctx);
                 }
             } else {
-                task->out_frame->width = output.width;
-                task->out_frame->height = output.height;
+                task->out_frame->width =
+                    outputs[0].dims[dnn_get_width_idx_by_layout(outputs[0].layout)];
+                task->out_frame->height =
+                    outputs[0].dims[dnn_get_height_idx_by_layout(outputs[0].layout)];
             }
             break;
         case DFT_ANALYTICS_DETECT:
-            if (!ov_model->model->detect_post_proc) {
+            if (!ov_model->model.detect_post_proc) {
                 av_log(ctx, AV_LOG_ERROR, "detect filter needs to provide post proc\n");
-                return;
+                goto end;
             }
-            ov_model->model->detect_post_proc(task->in_frame, &output, 1, ov_model->model->filter_ctx);
+            ov_model->model.detect_post_proc(task->in_frame, outputs,
+                                              ov_model->nb_outputs,
+                                              ov_model->model.filter_ctx);
             break;
         case DFT_ANALYTICS_CLASSIFY:
-            if (!ov_model->model->classify_post_proc) {
+            if (!ov_model->model.classify_post_proc) {
                 av_log(ctx, AV_LOG_ERROR, "classify filter needs to provide post proc\n");
-                return;
+                goto end;
             }
-            ov_model->model->classify_post_proc(task->in_frame, &output, request->lltasks[i]->bbox_index, ov_model->model->filter_ctx);
+            for (int output_i = 0; output_i < ov_model->nb_outputs; output_i++)
+                ov_model->model.classify_post_proc(task->in_frame, outputs,
+                                                    request->lltasks[i]->bbox_index,
+                                                    ov_model->model.filter_ctx);
             break;
         default:
             av_assert0(!"should not reach here");
@@ -468,10 +482,18 @@ static void infer_completion_callback(void *args)
 
         task->inference_done++;
         av_freep(&request->lltasks[i]);
-        output.data = (uint8_t *)output.data
-                      + output.width * output.height * output.channels * get_datatype_size(output.dt);
+        for (int i = 0; i < ov_model->nb_outputs; i++)
+            outputs[i].data = (uint8_t *)outputs[i].data +
+                outputs[i].dims[1] * outputs[i].dims[2] * outputs[i].dims[3] *
+                get_datatype_size(outputs[i].dt);
     }
-#if !HAVE_OPENVINO2
+end:
+#if HAVE_OPENVINO2
+    av_freep(&outputs);
+    ov_shape_free(&output_shape);
+    if (output_tensor)
+        ov_tensor_free(output_tensor);
+#else
     ie_blob_free(&output_blob);
 #endif
     request->lltask_count = 0;
@@ -494,7 +516,7 @@ static void dnn_free_model_ov(DNNModel **model)
     if (!model || !*model)
         return;
 
-    ov_model = (*model)->model;
+    ov_model = (OVModel *)(*model);
     while (ff_safe_queue_size(ov_model->request_queue) != 0) {
         OVRequestItem *item = ff_safe_queue_pop_front(ov_model->request_queue);
         if (item && item->infer_request) {
@@ -525,8 +547,10 @@ static void dnn_free_model_ov(DNNModel **model)
 #if HAVE_OPENVINO2
     if (ov_model->input_port)
         ov_output_const_port_free(ov_model->input_port);
-    if (ov_model->output_port)
-        ov_output_const_port_free(ov_model->output_port);
+    for (int i = 0; i < ov_model->nb_outputs; i++)
+        if (ov_model->output_ports[i])
+            ov_output_const_port_free(ov_model->output_ports[i]);
+    av_freep(&ov_model->output_ports);
     if (ov_model->preprocess)
         ov_preprocess_prepostprocessor_free(ov_model->preprocess);
     if (ov_model->compiled_model)
@@ -545,16 +569,15 @@ static void dnn_free_model_ov(DNNModel **model)
     av_free(ov_model->all_output_names);
     av_free(ov_model->all_input_names);
 #endif
-    av_opt_free(&ov_model->ctx);
     av_freep(&ov_model);
-    av_freep(model);
+    *model = NULL;
 }
 
 
-static int init_model_ov(OVModel *ov_model, const char *input_name, const char *output_name)
+static int init_model_ov(OVModel *ov_model, const char *input_name, const char **output_names, int nb_outputs)
 {
     int ret = 0;
-    OVContext *ctx = &ov_model->ctx;
+    DnnContext *ctx = ov_model->ctx;
 #if HAVE_OPENVINO2
     ov_status_e status;
     ov_preprocess_input_tensor_info_t* input_tensor_info = NULL;
@@ -565,7 +588,7 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
     ov_layout_t* NCHW_layout = NULL;
     const char* NHWC_desc = "NHWC";
     const char* NCHW_desc = "NCHW";
-    const char* device = ctx->options.device_type;
+    const char* device = ctx->device ? ctx->device : "CPU";
 #else
     IEStatusCode status;
     ie_available_devices_t a_dev;
@@ -573,17 +596,17 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
     char *all_dev_names = NULL;
 #endif
     // We scale pixel by default when do frame processing.
-    if (fabsf(ctx->options.scale) < 1e-6f)
-        ctx->options.scale = ov_model->model->func_type == DFT_PROCESS_FRAME ? 255 : 1;
+    if (fabsf(ctx->ov_option.scale) < 1e-6f)
+        ctx->ov_option.scale = ov_model->model.func_type == DFT_PROCESS_FRAME ? 255 : 1;
     // batch size
-    if (ctx->options.batch_size <= 0) {
-        ctx->options.batch_size = 1;
+    if (ctx->ov_option.batch_size <= 0) {
+        ctx->ov_option.batch_size = 1;
     }
 #if HAVE_OPENVINO2
-    if (ctx->options.batch_size > 1) {
+    if (ctx->ov_option.batch_size > 1) {
         avpriv_report_missing_feature(ctx, "Do not support batch_size > 1 for now,"
                                            "change batch_size to 1.\n");
-        ctx->options.batch_size = 1;
+        ctx->ov_option.batch_size = 1;
     }
 
     status = ov_preprocess_prepostprocessor_create(ov_model->ov_model, &ov_model->preprocess);
@@ -593,18 +616,19 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
         goto err;
     }
 
-    status = ov_preprocess_prepostprocessor_get_input_info_by_name(ov_model->preprocess, input_name, &ov_model->input_info);
-    status |= ov_preprocess_prepostprocessor_get_output_info_by_name(ov_model->preprocess, output_name, &ov_model->output_info);
+    if (input_name)
+        status = ov_preprocess_prepostprocessor_get_input_info_by_name(ov_model->preprocess, input_name, &ov_model->input_info);
+    else
+        status = ov_preprocess_prepostprocessor_get_input_info(ov_model->preprocess, &ov_model->input_info);
     if (status != OK) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to get input/output info from preprocess.\n");
+        av_log(ctx, AV_LOG_ERROR, "Failed to get input info from preprocess.\n");
         ret = ov2_map_error(status, NULL);
         goto err;
     }
 
     status = ov_preprocess_input_info_get_tensor_info(ov_model->input_info, &input_tensor_info);
-    status |= ov_preprocess_output_info_get_tensor_info(ov_model->output_info, &output_tensor_info);
     if (status != OK) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to get tensor info from input/output.\n");
+        av_log(ctx, AV_LOG_ERROR, "Failed to get tensor info from input.\n");
         ret = ov2_map_error(status, NULL);
         goto err;
     }
@@ -631,9 +655,9 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
         ret = ov2_map_error(status, NULL);
         goto err;
     }
-    if (ctx->options.layout == DL_NCHW)
+    if (ctx->ov_option.layout == DL_NCHW)
         status = ov_preprocess_input_model_info_set_layout(input_model_info, NCHW_layout);
-    else if (ctx->options.layout == DL_NHWC)
+    else if (ctx->ov_option.layout == DL_NHWC)
         status = ov_preprocess_input_model_info_set_layout(input_model_info, NHWC_layout);
     if (status != OK) {
         av_log(ctx, AV_LOG_ERROR, "Failed to get set input model layout\n");
@@ -642,19 +666,59 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
     }
 
     status = ov_preprocess_input_tensor_info_set_element_type(input_tensor_info, U8);
-    if (ov_model->model->func_type != DFT_PROCESS_FRAME)
-        status |= ov_preprocess_output_set_element_type(output_tensor_info, F32);
-    else if (fabsf(ctx->options.scale - 1) > 1e-6f || fabsf(ctx->options.mean) > 1e-6f)
-        status |= ov_preprocess_output_set_element_type(output_tensor_info, F32);
-    else
-        status |= ov_preprocess_output_set_element_type(output_tensor_info, U8);
     if (status != OK) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to set input/output element type\n");
+        av_log(ctx, AV_LOG_ERROR, "Failed to set input element type\n");
         ret = ov2_map_error(status, NULL);
         goto err;
     }
+
+    if (!nb_outputs) {
+        size_t output_size;
+        status = ov_model_outputs_size(ov_model->ov_model, &output_size);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to get output size.\n");
+            ret = ov2_map_error(status, NULL);
+            goto err;
+        }
+        nb_outputs = output_size;
+    }
+    ov_model->nb_outputs = nb_outputs;
+    for (int i = 0; i < nb_outputs; i++) {
+        if (output_names)
+            status = ov_preprocess_prepostprocessor_get_output_info_by_name(
+                    ov_model->preprocess, output_names[i], &ov_model->output_info);
+        else
+            status = ov_preprocess_prepostprocessor_get_output_info_by_index(
+                    ov_model->preprocess, i, &ov_model->output_info);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to get output info from preprocess.\n");
+            ret = ov2_map_error(status, NULL);
+            goto err;
+        }
+        status |= ov_preprocess_output_info_get_tensor_info(ov_model->output_info, &output_tensor_info);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to get tensor info from input/output.\n");
+            ret = ov2_map_error(status, NULL);
+            goto err;
+        }
+        if (ov_model->model.func_type != DFT_PROCESS_FRAME)
+            status |= ov_preprocess_output_set_element_type(output_tensor_info, F32);
+        else if (fabsf(ctx->ov_option.scale - 1) > 1e-6f || fabsf(ctx->ov_option.mean) > 1e-6f)
+            status |= ov_preprocess_output_set_element_type(output_tensor_info, F32);
+        else
+            status |= ov_preprocess_output_set_element_type(output_tensor_info, U8);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to set output element type\n");
+            ret = ov2_map_error(status, NULL);
+            goto err;
+        }
+        ov_preprocess_output_tensor_info_free(output_tensor_info);
+        output_tensor_info = NULL;
+        ov_preprocess_output_info_free(ov_model->output_info);
+        ov_model->output_info = NULL;
+    }
     // set preprocess steps.
-    if (fabsf(ctx->options.scale - 1) > 1e-6f || fabsf(ctx->options.mean) > 1e-6f) {
+    if (fabsf(ctx->ov_option.scale - 1) > 1e-6f || fabsf(ctx->ov_option.mean) > 1e-6f) {
         ov_preprocess_preprocess_steps_t* input_process_steps = NULL;
         status = ov_preprocess_input_info_get_preprocess_steps(ov_model->input_info, &input_process_steps);
         if (status != OK) {
@@ -663,15 +727,22 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
             goto err;
         }
         status = ov_preprocess_preprocess_steps_convert_element_type(input_process_steps, F32);
-        status |= ov_preprocess_preprocess_steps_mean(input_process_steps, ctx->options.mean);
-        status |= ov_preprocess_preprocess_steps_scale(input_process_steps, ctx->options.scale);
+        status |= ov_preprocess_preprocess_steps_mean(input_process_steps, ctx->ov_option.mean);
+        status |= ov_preprocess_preprocess_steps_scale(input_process_steps, ctx->ov_option.scale);
         if (status != OK) {
             av_log(ctx, AV_LOG_ERROR, "Failed to set preprocess steps\n");
+            ov_preprocess_preprocess_steps_free(input_process_steps);
+            input_process_steps = NULL;
             ret = ov2_map_error(status, NULL);
             goto err;
         }
         ov_preprocess_preprocess_steps_free(input_process_steps);
+        input_process_steps = NULL;
     }
+    ov_preprocess_input_tensor_info_free(input_tensor_info);
+    input_tensor_info = NULL;
+    ov_preprocess_input_info_free(ov_model->input_info);
+    ov_model->input_info = NULL;
 
     //update model
     if(ov_model->ov_model)
@@ -679,20 +750,46 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
     status = ov_preprocess_prepostprocessor_build(ov_model->preprocess, &ov_model->ov_model);
     if (status != OK) {
         av_log(ctx, AV_LOG_ERROR, "Failed to update OV model\n");
+        ov_model_free(tmp_ov_model);
+        tmp_ov_model = NULL;
         ret = ov2_map_error(status, NULL);
         goto err;
     }
     ov_model_free(tmp_ov_model);
 
     //update output_port
-    if (ov_model->output_port) {
-        ov_output_const_port_free(ov_model->output_port);
-        ov_model->output_port = NULL;
-    }
-    status = ov_model_const_output_by_name(ov_model->ov_model, output_name, &ov_model->output_port);
-    if (status != OK) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to get output port.\n");
-        goto err;
+    if (!ov_model->output_ports) {
+        ov_model->output_ports = av_calloc(nb_outputs, sizeof(*ov_model->output_ports));
+        if (!ov_model->output_ports) {
+            ret = AVERROR(ENOMEM);
+            goto err;
+        }
+    } else
+        for (int i = 0; i < nb_outputs; i++) {
+            ov_output_const_port_free(ov_model->output_ports[i]);
+            ov_model->output_ports[i] = NULL;
+        }
+
+    for (int i = 0; i < nb_outputs; i++) {
+        char *port_name;
+        if (output_names)
+            status = ov_model_const_output_by_name(ov_model->ov_model, output_names[i],
+                                            &ov_model->output_ports[i]);
+        else
+            status = ov_model_const_output_by_index(ov_model->ov_model, i,
+                                            &ov_model->output_ports[i]);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to get output port %s.\n", output_names[i]);
+            goto err;
+        }
+        status = ov_port_get_any_name(ov_model->output_ports[i], &port_name);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to get output port name.\n");
+            goto err;
+        }
+        av_log(ctx, AV_LOG_VERBOSE, "OpenVINO model outputs: %s\n", port_name);
+        ov_free(port_name);
+        port_name = NULL;
     }
     //compile network
     status = ov_core_compile_model(ov_model->core, ov_model->ov_model, device, 0, &ov_model->compiled_model);
@@ -701,10 +798,11 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
         goto err;
     }
     ov_preprocess_input_model_info_free(input_model_info);
+    input_model_info = NULL;
     ov_layout_free(NCHW_layout);
     ov_layout_free(NHWC_layout);
 #else
-    if (ctx->options.batch_size > 1) {
+    if (ctx->ov_option.batch_size > 1) {
         input_shapes_t input_shapes;
         status = ie_network_get_input_shapes(ov_model->network, &input_shapes);
         if (status != OK) {
@@ -712,7 +810,7 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
             goto err;
         }
         for (int i = 0; i < input_shapes.shape_num; i++)
-            input_shapes.shapes[i].shape.dims[0] = ctx->options.batch_size;
+            input_shapes.shapes[i].shape.dims[0] = ctx->ov_option.batch_size;
         status = ie_network_reshape(ov_model->network, input_shapes);
         ie_network_input_shapes_free(&input_shapes);
         if (status != OK) {
@@ -745,6 +843,7 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
         ret = DNN_GENERIC_ERROR;
         goto err;
     }
+    ov_model->nb_outputs = 1;
 
     // all models in openvino open model zoo use BGR with range [0.0f, 255.0f] as input,
     // we don't have a AVPixelFormat to describe it, so we'll use AV_PIX_FMT_BGR24 and
@@ -761,7 +860,7 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
         }
     }
 
-    status = ie_core_load_network(ov_model->core, ov_model->network, ctx->options.device_type, &config, &ov_model->exe_network);
+    status = ie_core_load_network(ov_model->core, ov_model->network, ctx->device, &config, &ov_model->exe_network);
     if (status != OK) {
         av_log(ctx, AV_LOG_ERROR, "Failed to load OpenVINO model network\n");
         status = ie_core_get_available_devices(ov_model->core, &a_dev);
@@ -774,15 +873,15 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
             APPEND_STRING(all_dev_names, a_dev.devices[i])
         }
         av_log(ctx, AV_LOG_ERROR,"device %s may not be supported, all available devices are: \"%s\"\n",
-               ctx->options.device_type, all_dev_names);
+               ctx->device, all_dev_names);
         ret = AVERROR(ENODEV);
         goto err;
     }
 #endif
     // create infer_requests for async execution
-    if (ctx->options.nireq <= 0) {
+    if (ctx->nireq <= 0) {
         // the default value is a rough estimation
-        ctx->options.nireq = av_cpu_count() / 2 + 1;
+        ctx->nireq = av_cpu_count() / 2 + 1;
     }
 
     ov_model->request_queue = ff_safe_queue_create();
@@ -791,7 +890,7 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
         goto err;
     }
 
-    for (int i = 0; i < ctx->options.nireq; i++) {
+    for (int i = 0; i < ctx->nireq; i++) {
         OVRequestItem *item = av_mallocz(sizeof(*item));
         if (!item) {
             ret = AVERROR(ENOMEM);
@@ -824,7 +923,7 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
         }
 #endif
 
-        item->lltasks = av_malloc_array(ctx->options.batch_size, sizeof(*item->lltasks));
+        item->lltasks = av_malloc_array(ctx->ov_option.batch_size, sizeof(*item->lltasks));
         if (!item->lltasks) {
             ret = AVERROR(ENOMEM);
             goto err;
@@ -848,6 +947,10 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
 
 err:
 #if HAVE_OPENVINO2
+    if (output_tensor_info)
+        ov_preprocess_output_tensor_info_free(output_tensor_info);
+    if (ov_model->output_info)
+        ov_preprocess_output_info_free(ov_model->output_info);
     if (NCHW_layout)
         ov_layout_free(NCHW_layout);
     if (NHWC_layout)
@@ -855,7 +958,6 @@ err:
     if (input_model_info)
         ov_preprocess_input_model_info_free(input_model_info);
 #endif
-    dnn_free_model_ov(&ov_model->model);
     return ret;
 }
 
@@ -869,7 +971,7 @@ static int execute_model_ov(OVRequestItem *request, Queue *inferenceq)
     LastLevelTaskItem *lltask;
     int ret = 0;
     TaskItem *task;
-    OVContext *ctx;
+    DnnContext *ctx;
     OVModel *ov_model;
 
     if (ff_queue_size(inferenceq) == 0) {
@@ -885,7 +987,7 @@ static int execute_model_ov(OVRequestItem *request, Queue *inferenceq)
     lltask = ff_queue_peek_front(inferenceq);
     task = lltask->task;
     ov_model = task->model;
-    ctx = &ov_model->ctx;
+    ctx = ov_model->ctx;
 
     ret = fill_model_input_ov(ov_model, request);
     if (ret != 0) {
@@ -956,46 +1058,48 @@ err:
     return ret;
 }
 
-static int get_input_ov(void *model, DNNData *input, const char *input_name)
+static int get_input_ov(DNNModel *model, DNNData *input, const char *input_name)
 {
-    OVModel *ov_model = model;
-    OVContext *ctx = &ov_model->ctx;
-    int input_resizable = ctx->options.input_resizable;
+    OVModel *ov_model = (OVModel *)model;
+    DnnContext *ctx = ov_model->ctx;
+    int input_resizable = ctx->ov_option.input_resizable;
 
 #if HAVE_OPENVINO2
     ov_shape_t input_shape = {0};
     ov_element_type_e precision;
-    int64_t* dims;
     ov_status_e status;
-    if (!ov_model_is_dynamic(ov_model->ov_model)) {
+    if (input_name)
         status = ov_model_const_input_by_name(ov_model->ov_model, input_name, &ov_model->input_port);
-        if (status != OK) {
-            av_log(ctx, AV_LOG_ERROR, "Failed to get input port shape.\n");
-            return ov2_map_error(status, NULL);
-        }
-
-        status = ov_const_port_get_shape(ov_model->input_port, &input_shape);
-        if (status != OK) {
-            av_log(ctx, AV_LOG_ERROR, "Failed to get input port shape.\n");
-            return ov2_map_error(status, NULL);
-        }
-        dims = input_shape.dims;
-
-        status = ov_port_get_element_type(ov_model->input_port, &precision);
-        if (status != OK) {
-            av_log(ctx, AV_LOG_ERROR, "Failed to get input port data type.\n");
-            return ov2_map_error(status, NULL);
-        }
-    } else {
-        avpriv_report_missing_feature(ctx, "Do not support dynamic model now.");
-        return AVERROR(ENOSYS);
+    else
+        status = ov_model_const_input(ov_model->ov_model, &ov_model->input_port);
+    if (status != OK) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get input port shape.\n");
+        return ov2_map_error(status, NULL);
+    }
+    status = ov_port_get_element_type(ov_model->input_port, &precision);
+    if (status != OK) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get input port data type.\n");
+        return ov2_map_error(status, NULL);
+    }
+    status = ov_const_port_get_shape(ov_model->input_port, &input_shape);
+    if (status != OK) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get input port shape.\n");
+        return ov2_map_error(status, NULL);
+    }
+    for (int i = 0; i < 4; i++)
+        input->dims[i] = input_shape.dims[i];
+    if (input_resizable) {
+        input->dims[dnn_get_width_idx_by_layout(input->layout)] = -1;
+        input->dims[dnn_get_height_idx_by_layout(input->layout)] = -1;
     }
 
-    input->channels = dims[1];
-    input->height   = input_resizable ? -1 : dims[2];
-    input->width    = input_resizable ? -1 : dims[3];
-    input->dt       = precision_to_datatype(precision);
+    if (input_shape.dims[1] <= 3) // NCHW
+        input->layout = DL_NCHW;
+    else // NHWC
+        input->layout = DL_NHWC;
 
+    input->dt       = precision_to_datatype(precision);
+    ov_shape_free(&input_shape);
     return 0;
 #else
     char *model_input_name = NULL;
@@ -1023,9 +1127,18 @@ static int get_input_ov(void *model, DNNData *input, const char *input_name)
                 return DNN_GENERIC_ERROR;
             }
 
-            input->channels = dims.dims[1];
-            input->height   = input_resizable ? -1 : dims.dims[2];
-            input->width    = input_resizable ? -1 : dims.dims[3];
+            for (int i = 0; i < 4; i++)
+                input->dims[i] = input_shape.dims[i];
+            if (input_resizable) {
+                input->dims[dnn_get_width_idx_by_layout(input->layout)] = -1;
+                input->dims[dnn_get_height_idx_by_layout(input->layout)] = -1;
+            }
+
+            if (input_shape.dims[1] <= 3) // NCHW
+                input->layout = DL_NCHW;
+            else // NHWC
+                input->layout = DL_NHWC;
+
             input->dt       = precision_to_datatype(precision);
             return 0;
         }
@@ -1063,7 +1176,7 @@ static int contain_valid_detection_bbox(AVFrame *frame)
         if (bbox->x < 0 || bbox->w < 0 || bbox->x + bbox->w >= frame->width) {
             return 0;
         }
-        if (bbox->y < 0 || bbox->h < 0 || bbox->y + bbox->h >= frame->width) {
+        if (bbox->y < 0 || bbox->h < 0 || bbox->y + bbox->h >= frame->height) {
             return 0;
         }
 
@@ -1141,7 +1254,7 @@ static int extract_lltask_from_task(DNNFunctionType func_type, TaskItem *task, Q
     }
 }
 
-static int get_output_ov(void *model, const char *input_name, int input_width, int input_height,
+static int get_output_ov(DNNModel *model, const char *input_name, int input_width, int input_height,
                                    const char *output_name, int *output_width, int *output_height)
 {
 #if HAVE_OPENVINO2
@@ -1154,64 +1267,56 @@ static int get_output_ov(void *model, const char *input_name, int input_width, i
     input_shapes_t input_shapes;
 #endif
     int ret;
-    OVModel *ov_model = model;
-    OVContext *ctx = &ov_model->ctx;
+    OVModel *ov_model = (OVModel *)model;
+    DnnContext *ctx = ov_model->ctx;
     TaskItem task;
     OVRequestItem *request;
     DNNExecBaseParams exec_params = {
         .input_name     = input_name,
-        .output_names   = &output_name,
+        .output_names   = output_name ? &output_name : NULL,
         .nb_output      = 1,
         .in_frame       = NULL,
         .out_frame      = NULL,
     };
 
-    if (ov_model->model->func_type != DFT_PROCESS_FRAME) {
+    if (ov_model->model.func_type != DFT_PROCESS_FRAME) {
         av_log(ctx, AV_LOG_ERROR, "Get output dim only when processing frame.\n");
         return AVERROR(EINVAL);
     }
 
 #if HAVE_OPENVINO2
-    if (ctx->options.input_resizable) {
-        if (!ov_model_is_dynamic(ov_model->ov_model)) {
-            status = ov_partial_shape_create(4, dims, &partial_shape);
-            if (status != OK) {
-                av_log(ctx, AV_LOG_ERROR, "Failed create partial shape.\n");
-                return ov2_map_error(status, NULL);
-            }
-            status = ov_const_port_get_shape(ov_model->input_port, &input_shape);
-            input_shape.dims[2] = input_height;
-            input_shape.dims[3] = input_width;
-            if (status != OK) {
-                av_log(ctx, AV_LOG_ERROR, "Failed create shape for model input resize.\n");
-                return ov2_map_error(status, NULL);
-            }
+    if (ctx->ov_option.input_resizable) {
+        status = ov_partial_shape_create(4, dims, &partial_shape);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to create partial shape.\n");
+            return ov2_map_error(status, NULL);
+        }
+        status = ov_const_port_get_shape(ov_model->input_port, &input_shape);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to create shape for model input resize.\n");
+            return ov2_map_error(status, NULL);
+        }
+        input_shape.dims[2] = input_height;
+        input_shape.dims[3] = input_width;
 
-            status = ov_shape_to_partial_shape(input_shape, &partial_shape);
-            if (status != OK) {
-                av_log(ctx, AV_LOG_ERROR, "Failed create partial shape for model input resize.\n");
-                return ov2_map_error(status, NULL);
-            }
+        status = ov_shape_to_partial_shape(input_shape, &partial_shape);
+        ov_shape_free(&input_shape);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to create partial shape for model input resize.\n");
+            return ov2_map_error(status, NULL);
+        }
 
-            status = ov_model_reshape_single_input(ov_model->ov_model, partial_shape);
-            if (status != OK) {
-                av_log(ctx, AV_LOG_ERROR, "Failed to reszie model input.\n");
-                return ov2_map_error(status, NULL);
-            }
-        } else {
-            avpriv_report_missing_feature(ctx, "Do not support dynamic model.");
-            return AVERROR(ENOTSUP);
+        status = ov_model_reshape_single_input(ov_model->ov_model, partial_shape);
+        ov_partial_shape_free(&partial_shape);
+        if (status != OK) {
+            av_log(ctx, AV_LOG_ERROR, "Failed to reszie model input.\n");
+            return ov2_map_error(status, NULL);
         }
     }
 
-    status = ov_model_const_output_by_name(ov_model->ov_model, output_name, &ov_model->output_port);
-    if (status != OK) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to get output port.\n");
-        return ov2_map_error(status, NULL);
-    }
     if (!ov_model->compiled_model) {
 #else
-    if (ctx->options.input_resizable) {
+    if (ctx->ov_option.input_resizable) {
         status = ie_network_get_input_shapes(ov_model->network, &input_shapes);
         input_shapes.shapes->shape.dims[2] = input_height;
         input_shapes.shapes->shape.dims[3] = input_width;
@@ -1224,7 +1329,7 @@ static int get_output_ov(void *model, const char *input_name, int input_width, i
     }
     if (!ov_model->exe_network) {
 #endif
-        ret = init_model_ov(ov_model, input_name, output_name);
+        ret = init_model_ov(ov_model, input_name, output_name ? &output_name : NULL, 1);
         if (ret != 0) {
             av_log(ctx, AV_LOG_ERROR, "Failed init OpenVINO exectuable network or inference request\n");
             return ret;
@@ -1236,7 +1341,7 @@ static int get_output_ov(void *model, const char *input_name, int input_width, i
         goto err;
     }
 
-    ret = extract_lltask_from_task(ov_model->model->func_type, &task, ov_model->lltask_queue, NULL);
+    ret = extract_lltask_from_task(ov_model->model.func_type, &task, ov_model->lltask_queue, NULL);
     if (ret != 0) {
         av_log(ctx, AV_LOG_ERROR, "unable to extract inference from task.\n");
         goto err;
@@ -1258,11 +1363,10 @@ err:
     return ret;
 }
 
-static DNNModel *dnn_load_model_ov(const char *model_filename, DNNFunctionType func_type, const char *options, AVFilterContext *filter_ctx)
+static DNNModel *dnn_load_model_ov(DnnContext *ctx, DNNFunctionType func_type, AVFilterContext *filter_ctx)
 {
     DNNModel *model = NULL;
     OVModel *ov_model = NULL;
-    OVContext *ctx = NULL;
 #if HAVE_OPENVINO2
     ov_core_t* core = NULL;
     ov_model_t* ovmodel = NULL;
@@ -1273,27 +1377,11 @@ static DNNModel *dnn_load_model_ov(const char *model_filename, DNNFunctionType f
     IEStatusCode status;
 #endif
 
-    model = av_mallocz(sizeof(DNNModel));
-    if (!model){
-        return NULL;
-    }
-
     ov_model = av_mallocz(sizeof(OVModel));
-    if (!ov_model) {
-        av_freep(&model);
+    if (!ov_model)
         return NULL;
-    }
-    model->model = ov_model;
-    ov_model->model = model;
-    ov_model->ctx.class = &dnn_openvino_class;
-    ctx = &ov_model->ctx;
-
-    //parse options
-    av_opt_set_defaults(ctx);
-    if (av_opt_set_from_string(ctx, options, NULL, "=", "&") < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to parse options \"%s\"\n", options);
-        goto err;
-    }
+    ov_model->ctx = ctx;
+    model = &ov_model->model;
 
 #if HAVE_OPENVINO2
     status = ov_core_create(&core);
@@ -1302,13 +1390,13 @@ static DNNModel *dnn_load_model_ov(const char *model_filename, DNNFunctionType f
     }
     ov_model->core = core;
 
-    status = ov_core_read_model(core, model_filename, NULL, &ovmodel);
+    status = ov_core_read_model(core, ctx->model_filename, NULL, &ovmodel);
     if (status != OK) {
         ov_version_t ver;
         status = ov_get_openvino_version(&ver);
         av_log(NULL, AV_LOG_ERROR, "Failed to read the network from model file %s,\n"
                                   "Please check if the model version matches the runtime OpenVINO Version:\n",
-                                   model_filename);
+                                   ctx->model_filename);
         if (status == OK) {
             av_log(NULL, AV_LOG_ERROR, "BuildNumber: %s\n", ver.buildNumber);
         }
@@ -1324,13 +1412,13 @@ static DNNModel *dnn_load_model_ov(const char *model_filename, DNNFunctionType f
     if (status != OK)
         goto err;
 
-    status = ie_core_read_network(ov_model->core, model_filename, NULL, &ov_model->network);
+    status = ie_core_read_network(ov_model->core, ctx->model_filename, NULL, &ov_model->network);
     if (status != OK) {
         ie_version_t ver;
         ver = ie_c_api_version();
         av_log(ctx, AV_LOG_ERROR, "Failed to read the network from model file %s,\n"
                                   "Please check if the model version matches the runtime OpenVINO %s\n",
-                                   model_filename, ver.api_version);
+                                   ctx->model_filename, ver.api_version);
         ie_version_free(&ver);
         goto err;
     }
@@ -1368,7 +1456,6 @@ static DNNModel *dnn_load_model_ov(const char *model_filename, DNNFunctionType f
 
     model->get_input = &get_input_ov;
     model->get_output = &get_output_ov;
-    model->options = options;
     model->filter_ctx = filter_ctx;
     model->func_type = func_type;
 
@@ -1381,8 +1468,8 @@ err:
 
 static int dnn_execute_model_ov(const DNNModel *model, DNNExecBaseParams *exec_params)
 {
-    OVModel *ov_model = model->model;
-    OVContext *ctx = &ov_model->ctx;
+    OVModel *ov_model = (OVModel *)model;
+    DnnContext *ctx = ov_model->ctx;
     OVRequestItem *request;
     TaskItem *task;
     int ret;
@@ -1397,7 +1484,8 @@ static int dnn_execute_model_ov(const DNNModel *model, DNNExecBaseParams *exec_p
 #else
     if (!ov_model->exe_network) {
 #endif
-        ret = init_model_ov(ov_model, exec_params->input_name, exec_params->output_names[0]);
+        ret = init_model_ov(ov_model, exec_params->input_name,
+                            exec_params->output_names, exec_params->nb_output);
         if (ret != 0) {
             av_log(ctx, AV_LOG_ERROR, "Failed init OpenVINO exectuable network or inference request\n");
             return ret;
@@ -1410,7 +1498,7 @@ static int dnn_execute_model_ov(const DNNModel *model, DNNExecBaseParams *exec_p
         return AVERROR(ENOMEM);
     }
 
-    ret = ff_dnn_fill_task(task, exec_params, ov_model, ctx->options.async, 1);
+    ret = ff_dnn_fill_task(task, exec_params, ov_model, ctx->async, 1);
     if (ret != 0) {
         av_freep(&task);
         return ret;
@@ -1428,8 +1516,8 @@ static int dnn_execute_model_ov(const DNNModel *model, DNNExecBaseParams *exec_p
         return ret;
     }
 
-    if (ctx->options.async) {
-        while (ff_queue_size(ov_model->lltask_queue) >= ctx->options.batch_size) {
+    if (ctx->async) {
+        while (ff_queue_size(ov_model->lltask_queue) >= ctx->ov_option.batch_size) {
             request = ff_safe_queue_pop_front(ov_model->request_queue);
             if (!request) {
                 av_log(ctx, AV_LOG_ERROR, "unable to get infer request.\n");
@@ -1452,7 +1540,7 @@ static int dnn_execute_model_ov(const DNNModel *model, DNNExecBaseParams *exec_p
             return AVERROR(ENOSYS);
         }
 
-        if (ctx->options.batch_size > 1) {
+        if (ctx->ov_option.batch_size > 1) {
             avpriv_report_missing_feature(ctx, "batch mode for sync execution");
             return AVERROR(ENOSYS);
         }
@@ -1468,14 +1556,14 @@ static int dnn_execute_model_ov(const DNNModel *model, DNNExecBaseParams *exec_p
 
 static DNNAsyncStatusType dnn_get_result_ov(const DNNModel *model, AVFrame **in, AVFrame **out)
 {
-    OVModel *ov_model = model->model;
+    OVModel *ov_model = (OVModel *)model;
     return ff_dnn_get_result_common(ov_model->task_queue, in, out);
 }
 
 static int dnn_flush_ov(const DNNModel *model)
 {
-    OVModel *ov_model = model->model;
-    OVContext *ctx = &ov_model->ctx;
+    OVModel *ov_model = (OVModel *)model;
+    DnnContext *ctx = ov_model->ctx;
     OVRequestItem *request;
 #if HAVE_OPENVINO2
     ov_status_e status;
@@ -1523,6 +1611,8 @@ static int dnn_flush_ov(const DNNModel *model)
 }
 
 const DNNModule ff_dnn_backend_openvino = {
+    .clazz          = DNN_DEFINE_CLASS(dnn_openvino),
+    .type           = DNN_OV,
     .load_model     = dnn_load_model_ov,
     .execute_model  = dnn_execute_model_ov,
     .get_result     = dnn_get_result_ov,

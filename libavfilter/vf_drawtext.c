@@ -47,8 +47,8 @@
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 #include "libavutil/common.h"
-#include "libavutil/file.h"
 #include "libavutil/eval.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/random_seed.h"
 #include "libavutil/parseutils.h"
@@ -60,8 +60,9 @@
 #include "libavutil/detection_bbox.h"
 #include "avfilter.h"
 #include "drawutils.h"
+#include "filters.h"
 #include "formats.h"
-#include "internal.h"
+#include "textutils.h"
 #include "video.h"
 
 #if CONFIG_LIBFRIBIDI
@@ -103,9 +104,6 @@ static const char *const var_names[] = {
     "pict_type",
 #if FF_API_FRAME_PKT
     "pkt_pos",
-#endif
-#if FF_API_PKT_DURATION
-    "pkt_duration",
 #endif
 #if FF_API_FRAME_PKT
     "pkt_size",
@@ -154,9 +152,6 @@ enum var_name {
     VAR_PICT_TYPE,
 #if FF_API_FRAME_PKT
     VAR_PKT_POS,
-#endif
-#if FF_API_PKT_DURATION
-    VAR_PKT_DURATION,
 #endif
 #if FF_API_FRAME_PKT
     VAR_PKT_SIZE,
@@ -253,6 +248,7 @@ typedef struct TextMetrics {
 typedef struct DrawTextContext {
     const AVClass *class;
     int exp_mode;                   ///< expansion mode to use for the text
+    FFExpandTextContext expand_text; ///< expand text in case exp_mode == NORMAL
     int reinit;                     ///< tells if the filter is being reinited
 #if CONFIG_LIBFONTCONFIG
     uint8_t *font;                  ///< font to be used
@@ -350,7 +346,7 @@ static const AVOption drawtext_options[]= {
     {"boxborderw",     "set box borders width", OFFSET(boxborderw),         AV_OPT_TYPE_STRING, {.str="0"},   0, 0, TFLAGS},
     {"line_spacing",   "set line spacing in pixels", OFFSET(line_spacing),  AV_OPT_TYPE_INT,    {.i64=0},     INT_MIN, INT_MAX, TFLAGS},
     {"fontsize",       "set font size",         OFFSET(fontsize_expr),      AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, TFLAGS},
-    {"text_align",     "set text alignment",    OFFSET(text_align),         AV_OPT_TYPE_FLAGS,  {.i64=0}, 0, (TA_LEFT|TA_RIGHT|TA_TOP|TA_BOTTOM), TFLAGS, "text_align"},
+    {"text_align",     "set text alignment",    OFFSET(text_align),         AV_OPT_TYPE_FLAGS,  {.i64=0}, 0, (TA_LEFT|TA_RIGHT|TA_TOP|TA_BOTTOM), TFLAGS, .unit = "text_align"},
         { "left",    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = TA_LEFT   }, .flags = TFLAGS, .unit = "text_align" },
         { "L",       NULL, 0, AV_OPT_TYPE_CONST, { .i64 = TA_LEFT   }, .flags = TFLAGS, .unit = "text_align" },
         { "right",   NULL, 0, AV_OPT_TYPE_CONST, { .i64 = TA_RIGHT  }, .flags = TFLAGS, .unit = "text_align" },
@@ -376,14 +372,14 @@ static const AVOption drawtext_options[]= {
     { "font",        "Font name",            OFFSET(font),               AV_OPT_TYPE_STRING, { .str = "Sans" },           .flags = FLAGS },
 #endif
 
-    {"expansion", "set the expansion mode", OFFSET(exp_mode), AV_OPT_TYPE_INT, {.i64=EXP_NORMAL}, 0, 2, FLAGS, "expansion"},
-        {"none",     "set no expansion",                    OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_NONE},     0, 0, FLAGS, "expansion"},
-        {"normal",   "set normal expansion",                OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_NORMAL},   0, 0, FLAGS, "expansion"},
-        {"strftime", "set strftime expansion (deprecated)", OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_STRFTIME}, 0, 0, FLAGS, "expansion"},
-    {"y_align",   "set the y alignment",    OFFSET(y_align), AV_OPT_TYPE_INT,  {.i64=YA_TEXT}, 0, 2, TFLAGS, "y_align"},
-        {"text",     "y is referred to the top of the first text line", OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_TEXT},     0, 0, FLAGS, "y_align"},
-        {"baseline", "y is referred to the baseline of the first line", OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_BASELINE}, 0, 0, FLAGS, "y_align"},
-        {"font",     "y is referred to the font defined line metrics",  OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_FONT},     0, 0, FLAGS, "y_align"},
+    {"expansion", "set the expansion mode", OFFSET(exp_mode), AV_OPT_TYPE_INT, {.i64=EXP_NORMAL}, 0, 2, FLAGS, .unit = "expansion"},
+        {"none",     "set no expansion",                    OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_NONE},     0, 0, FLAGS, .unit = "expansion"},
+        {"normal",   "set normal expansion",                OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_NORMAL},   0, 0, FLAGS, .unit = "expansion"},
+        {"strftime", "set strftime expansion (deprecated)", OFFSET(exp_mode), AV_OPT_TYPE_CONST, {.i64=EXP_STRFTIME}, 0, 0, FLAGS, .unit = "expansion"},
+    {"y_align",   "set the y alignment",    OFFSET(y_align), AV_OPT_TYPE_INT,  {.i64=YA_TEXT}, 0, 2, TFLAGS, .unit = "y_align"},
+        {"text",     "y is referred to the top of the first text line", OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_TEXT},     0, 0, FLAGS, .unit = "y_align"},
+        {"baseline", "y is referred to the baseline of the first line", OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_BASELINE}, 0, 0, FLAGS, .unit = "y_align"},
+        {"font",     "y is referred to the font defined line metrics",  OFFSET(y_align), AV_OPT_TYPE_CONST, {.i64=YA_FONT},     0, 0, FLAGS, .unit = "y_align"},
 
     {"timecode",        "set initial timecode",             OFFSET(tc_opt_string), AV_OPT_TYPE_STRING,   {.str=NULL}, 0, 0, FLAGS},
     {"tc24hmax",        "set 24 hours max (timecode only)", OFFSET(tc24hmax),      AV_OPT_TYPE_BOOL,     {.i64=0},    0, 1, FLAGS},
@@ -401,7 +397,7 @@ static const AVOption drawtext_options[]= {
 #endif
 
     /* FT_LOAD_* flags */
-    { "ft_load_flags", "set font loading flags for libfreetype", OFFSET(ft_load_flags), AV_OPT_TYPE_FLAGS, { .i64 = FT_LOAD_DEFAULT }, 0, INT_MAX, FLAGS, "ft_load_flags" },
+    { "ft_load_flags", "set font loading flags for libfreetype", OFFSET(ft_load_flags), AV_OPT_TYPE_FLAGS, { .i64 = FT_LOAD_DEFAULT }, 0, INT_MAX, FLAGS, .unit = "ft_load_flags" },
         { "default",                     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FT_LOAD_DEFAULT },                     .flags = FLAGS, .unit = "ft_load_flags" },
         { "no_scale",                    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FT_LOAD_NO_SCALE },                    .flags = FLAGS, .unit = "ft_load_flags" },
         { "no_hinting",                  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FT_LOAD_NO_HINTING },                  .flags = FLAGS, .unit = "ft_load_flags" },
@@ -631,40 +627,6 @@ static int load_font(AVFilterContext *ctx)
     return err;
 }
 
-static inline int is_newline(uint32_t c)
-{
-    return c == '\n' || c == '\r' || c == '\f' || c == '\v';
-}
-
-static int load_textfile(AVFilterContext *ctx)
-{
-    DrawTextContext *s = ctx->priv;
-    int err;
-    uint8_t *textbuf;
-    uint8_t *tmp;
-    size_t textbuf_size;
-
-    if ((err = av_file_map(s->textfile, &textbuf, &textbuf_size, 0, ctx)) < 0) {
-        av_log(ctx, AV_LOG_ERROR,
-               "The text file '%s' could not be read or is empty\n",
-               s->textfile);
-        return err;
-    }
-
-    if (textbuf_size > 0 && is_newline(textbuf[textbuf_size - 1]))
-        textbuf_size--;
-    if (textbuf_size > SIZE_MAX - 1 || !(tmp = av_realloc(s->text, textbuf_size + 1))) {
-        av_file_unmap(textbuf, textbuf_size);
-        return AVERROR(ENOMEM);
-    }
-    s->text = tmp;
-    memcpy(s->text, textbuf, textbuf_size);
-    s->text[textbuf_size] = 0;
-    av_file_unmap(textbuf, textbuf_size);
-
-    return 0;
-}
-
 #if CONFIG_LIBFRIBIDI
 static int shape_text(AVFilterContext *ctx)
 {
@@ -717,7 +679,7 @@ static int shape_text(AVFilterContext *ctx)
     fribidi_shape(flags, embedding_levels, len, ar_props, unicodestr);
 
     for (line_end = 0, line_start = 0; line_end < len; line_end++) {
-        if (is_newline(unicodestr[line_end]) || line_end == len - 1) {
+        if (ff_is_newline(unicodestr[line_end]) || line_end == len - 1) {
             if (!fribidi_reorder_line(flags, bidi_types,
                                       line_end - line_start + 1, line_start,
                                       direction, embedding_levels, unicodestr,
@@ -885,6 +847,123 @@ static int string_to_array(const char *source, int *result, int result_size)
     return counter;
 }
 
+static int func_pict_type(void *ctx, AVBPrint *bp, const char *function_name, unsigned argc, char **argv)
+{
+    DrawTextContext *s = ((AVFilterContext *)ctx)->priv;
+
+    av_bprintf(bp, "%c", av_get_picture_type_char(s->var_values[VAR_PICT_TYPE]));
+    return 0;
+}
+
+static int func_pts(void *ctx, AVBPrint *bp, const char *function_name, unsigned argc, char **argv)
+{
+    DrawTextContext *s = ((AVFilterContext *)ctx)->priv;
+    const char *fmt;
+    const char *strftime_fmt = NULL;
+    const char *delta = NULL;
+    double pts = s->var_values[VAR_T];
+
+    // argv: pts, FMT, [DELTA, 24HH | strftime_fmt]
+
+    fmt = argc >= 1 ? argv[0] : "flt";
+    if (argc >= 2) {
+        delta = argv[1];
+    }
+    if (argc >= 3) {
+        if (!strcmp(fmt, "hms")) {
+            if (!strcmp(argv[2], "24HH")) {
+                av_log(ctx, AV_LOG_WARNING, "pts third argument 24HH is deprected, use pts:hms24hh instead\n");
+                fmt = "hms24";
+            } else {
+                av_log(ctx, AV_LOG_ERROR, "Invalid argument '%s', '24HH' was expected\n", argv[2]);
+                return AVERROR(EINVAL);
+            }
+        } else {
+            strftime_fmt = argv[2];
+        }
+    }
+
+    return ff_print_pts(ctx, bp, pts, delta, fmt, strftime_fmt);
+}
+
+static int func_frame_num(void *ctx, AVBPrint *bp, const char *function_name, unsigned argc, char **argv)
+{
+    DrawTextContext *s = ((AVFilterContext *)ctx)->priv;
+
+    av_bprintf(bp, "%d", (int)s->var_values[VAR_N]);
+    return 0;
+}
+
+static int func_metadata(void *ctx, AVBPrint *bp, const char *function_name, unsigned argc, char **argv)
+{
+    DrawTextContext *s = ((AVFilterContext *)ctx)->priv;
+    AVDictionaryEntry *e = av_dict_get(s->metadata, argv[0], NULL, 0);
+
+    if (e && e->value)
+        av_bprintf(bp, "%s", e->value);
+    else if (argc >= 2)
+        av_bprintf(bp, "%s", argv[1]);
+    return 0;
+}
+
+static int func_strftime(void *ctx, AVBPrint *bp, const char *function_name, unsigned argc, char **argv)
+{
+    const char *strftime_fmt = argc ? argv[0] : NULL;
+
+    return ff_print_time(ctx, bp, strftime_fmt, !strcmp(function_name, "localtime"));
+}
+
+static int func_eval_expr(void *ctx, AVBPrint *bp, const char *function_name, unsigned argc, char **argv)
+{
+    DrawTextContext *s = ((AVFilterContext *)ctx)->priv;
+
+    return ff_print_eval_expr(ctx, bp, argv[0],
+                              fun2_names, fun2,
+                              var_names, s->var_values, &s->prng);
+}
+
+static int func_eval_expr_int_format(void *ctx, AVBPrint *bp, const char *function_name, unsigned argc, char **argv)
+{
+    DrawTextContext *s = ((AVFilterContext *)ctx)->priv;
+    int ret;
+    int positions = -1;
+
+    /*
+     * argv[0] expression to be converted to `int`
+     * argv[1] format: 'x', 'X', 'd' or 'u'
+     * argv[2] positions printed (optional)
+     */
+
+    if (argc == 3) {
+        ret = sscanf(argv[2], "%u", &positions);
+        if (ret != 1) {
+            av_log(ctx, AV_LOG_ERROR, "expr_int_format(): Invalid number of positions"
+                    " to print: '%s'\n", argv[2]);
+            return AVERROR(EINVAL);
+        }
+    }
+
+    return ff_print_formatted_eval_expr(ctx, bp, argv[0],
+                                        fun2_names, fun2,
+                                        var_names, s->var_values,
+                                        &s->prng,
+                                        argv[1][0], positions);
+}
+
+static const FFExpandTextFunction expand_text_functions[] = {
+    { "e",               1, 1, func_eval_expr },
+    { "eif",             2, 3, func_eval_expr_int_format },
+    { "expr",            1, 1, func_eval_expr },
+    { "expr_int_format", 2, 3, func_eval_expr_int_format },
+    { "frame_num",       0, 0, func_frame_num },
+    { "gmtime",          0, 1, func_strftime },
+    { "localtime",       0, 1, func_strftime },
+    { "metadata",        1, 2, func_metadata },
+    { "n",               0, 0, func_frame_num },
+    { "pict_type",       0, 0, func_pict_type },
+    { "pts",             0, 3, func_pts }
+};
+
 static av_cold int init(AVFilterContext *ctx)
 {
     int err;
@@ -907,7 +986,7 @@ static av_cold int init(AVFilterContext *ctx)
                    "Both text and text file provided. Please provide only one\n");
             return AVERROR(EINVAL);
         }
-        if ((err = load_textfile(ctx)) < 0)
+        if ((err = ff_load_textfile(ctx, (const char *)s->textfile, &s->text, NULL)) < 0)
             return err;
     }
 
@@ -949,6 +1028,12 @@ static av_cold int init(AVFilterContext *ctx)
                "Either text, a valid file, a timecode or text source must be provided\n");
         return AVERROR(EINVAL);
     }
+
+    s->expand_text = (FFExpandTextContext) {
+        .log_ctx = ctx,
+        .functions = expand_text_functions,
+        .functions_nb = FF_ARRAY_ELEMS(expand_text_functions)
+    };
 
 #if CONFIG_LIBFRIBIDI
     if (s->text_shaping)
@@ -1062,7 +1147,7 @@ static int config_input(AVFilterLink *inlink)
     char *expr;
     int ret;
 
-    ff_draw_init(&s->dc, inlink->format, FF_DRAW_PROCESS_ALPHA);
+    ff_draw_init2(&s->dc, inlink->format, inlink->colorspace, inlink->color_range, FF_DRAW_PROCESS_ALPHA);
     ff_draw_color(&s->dc, &s->fontcolor,   s->fontcolor.rgba);
     ff_draw_color(&s->dc, &s->shadowcolor, s->shadowcolor.rgba);
     ff_draw_color(&s->dc, &s->bordercolor, s->bordercolor.rgba);
@@ -1158,367 +1243,6 @@ fail:
     av_log(ctx, AV_LOG_ERROR, "Failed to process command. Continuing with existing parameters.\n");
     av_freep(&new);
     return ret;
-}
-
-static int func_pict_type(AVFilterContext *ctx, AVBPrint *bp,
-                          char *fct, unsigned argc, char **argv, int tag)
-{
-    DrawTextContext *s = ctx->priv;
-
-    av_bprintf(bp, "%c", av_get_picture_type_char(s->var_values[VAR_PICT_TYPE]));
-    return 0;
-}
-
-static int func_pts(AVFilterContext *ctx, AVBPrint *bp,
-                    char *fct, unsigned argc, char **argv, int tag)
-{
-    DrawTextContext *s = ctx->priv;
-    const char *fmt;
-    double pts = s->var_values[VAR_T];
-    int ret;
-
-    fmt = argc >= 1 ? argv[0] : "flt";
-    if (argc >= 2) {
-        int64_t delta;
-        if ((ret = av_parse_time(&delta, argv[1], 1)) < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Invalid delta '%s'\n", argv[1]);
-            return ret;
-        }
-        pts += (double)delta / AV_TIME_BASE;
-    }
-    if (!strcmp(fmt, "flt")) {
-        av_bprintf(bp, "%.6f", pts);
-    } else if (!strcmp(fmt, "hms")) {
-        if (isnan(pts)) {
-            av_bprintf(bp, " ??:??:??.???");
-        } else {
-            int64_t ms = llrint(pts * 1000);
-            char sign = ' ';
-            if (ms < 0) {
-                sign = '-';
-                ms = -ms;
-            }
-            if (argc >= 3) {
-                if (!strcmp(argv[2], "24HH")) {
-                    ms %= 24 * 60 * 60 * 1000;
-                } else {
-                    av_log(ctx, AV_LOG_ERROR, "Invalid argument '%s'\n", argv[2]);
-                    return AVERROR(EINVAL);
-                }
-            }
-            av_bprintf(bp, "%c%02d:%02d:%02d.%03d", sign,
-                       (int)(ms / (60 * 60 * 1000)),
-                       (int)(ms / (60 * 1000)) % 60,
-                       (int)(ms / 1000) % 60,
-                       (int)(ms % 1000));
-        }
-    } else if (!strcmp(fmt, "localtime") ||
-               !strcmp(fmt, "gmtime")) {
-        struct tm tm;
-        time_t ms = (time_t)pts;
-        const char *timefmt = argc >= 3 ? argv[2] : "%Y-%m-%d %H:%M:%S";
-        if (!strcmp(fmt, "localtime"))
-            localtime_r(&ms, &tm);
-        else
-            gmtime_r(&ms, &tm);
-        av_bprint_strftime(bp, timefmt, &tm);
-    } else {
-        av_log(ctx, AV_LOG_ERROR, "Invalid format '%s'\n", fmt);
-        return AVERROR(EINVAL);
-    }
-    return 0;
-}
-
-static int func_frame_num(AVFilterContext *ctx, AVBPrint *bp,
-                          char *fct, unsigned argc, char **argv, int tag)
-{
-    DrawTextContext *s = ctx->priv;
-
-    av_bprintf(bp, "%d", (int)s->var_values[VAR_N]);
-    return 0;
-}
-
-static int func_metadata(AVFilterContext *ctx, AVBPrint *bp,
-                         char *fct, unsigned argc, char **argv, int tag)
-{
-    DrawTextContext *s = ctx->priv;
-    AVDictionaryEntry *e = av_dict_get(s->metadata, argv[0], NULL, 0);
-
-    if (e && e->value)
-        av_bprintf(bp, "%s", e->value);
-    else if (argc >= 2)
-        av_bprintf(bp, "%s", argv[1]);
-    return 0;
-}
-
-static int func_strftime(AVFilterContext *ctx, AVBPrint *bp,
-                         char *fct, unsigned argc, char **argv, int tag)
-{
-    const char *fmt = argc ? argv[0] : "%Y-%m-%d %H:%M:%S";
-    const char *fmt_begin = fmt;
-    int64_t unow;
-    time_t now;
-    struct tm tm;
-    const char *begin;
-    const char *tmp;
-    int len;
-    int div;
-    AVBPrint fmt_bp;
-
-    av_bprint_init(&fmt_bp, 0, AV_BPRINT_SIZE_UNLIMITED);
-
-    unow = av_gettime();
-    now  = unow / 1000000;
-    if (tag == 'L' || tag == 'm')
-        localtime_r(&now, &tm);
-    else
-        tm = *gmtime_r(&now, &tm);
-
-    // manually parse format for %N (fractional seconds)
-    begin = fmt;
-    while ((begin = strchr(begin, '%'))) {
-        tmp = begin + 1;
-        len = 0;
-
-        // skip escaped "%%"
-        if (*tmp == '%') {
-            begin = tmp + 1;
-            continue;
-        }
-
-        // count digits between % and possible N
-        while (*tmp != '\0' && av_isdigit((int)*tmp)) {
-            len++;
-            tmp++;
-        }
-
-        // N encountered, insert time
-        if (*tmp == 'N') {
-            int num_digits = 3; // default show millisecond [1,6]
-
-            // if digit given, expect [1,6], warn & clamp otherwise
-            if (len == 1) {
-                num_digits = av_clip(*(begin + 1) - '0', 1, 6);
-            } else if (len > 1) {
-                av_log(ctx, AV_LOG_WARNING, "Invalid number of decimals for %%N, using default of %i\n", num_digits);
-            }
-
-            len += 2; // add % and N to get length of string part
-
-            div = pow(10, 6 - num_digits);
-
-            av_bprintf(&fmt_bp, "%.*s%0*d", (int)(begin - fmt_begin), fmt_begin, num_digits, (int)(unow % 1000000) / div);
-
-            begin += len;
-            fmt_begin = begin;
-
-            continue;
-        }
-
-        begin = tmp;
-    }
-
-    av_bprintf(&fmt_bp, "%s", fmt_begin);
-    if (!av_bprint_is_complete(&fmt_bp)) {
-        av_log(ctx, AV_LOG_WARNING, "Format string truncated at %u/%u.", fmt_bp.size, fmt_bp.len);
-    }
-
-    av_bprint_strftime(bp, fmt_bp.str, &tm);
-
-    av_bprint_finalize(&fmt_bp, NULL);
-
-    return 0;
-}
-
-static int func_eval_expr(AVFilterContext *ctx, AVBPrint *bp,
-                          char *fct, unsigned argc, char **argv, int tag)
-{
-    DrawTextContext *s = ctx->priv;
-    double res;
-    int ret;
-
-    ret = av_expr_parse_and_eval(&res, argv[0], var_names, s->var_values,
-                                 NULL, NULL, fun2_names, fun2,
-                                 &s->prng, 0, ctx);
-    if (ret < 0)
-        av_log(ctx, AV_LOG_ERROR,
-               "Expression '%s' for the expr text expansion function is not valid\n",
-               argv[0]);
-    else
-        av_bprintf(bp, "%f", res);
-
-    return ret;
-}
-
-static int func_eval_expr_int_format(AVFilterContext *ctx, AVBPrint *bp,
-                          char *fct, unsigned argc, char **argv, int tag)
-{
-    DrawTextContext *s = ctx->priv;
-    double res;
-    int intval;
-    int ret;
-    unsigned int positions = 0;
-    char fmt_str[30] = "%";
-
-    /*
-     * argv[0] expression to be converted to `int`
-     * argv[1] format: 'x', 'X', 'd' or 'u'
-     * argv[2] positions printed (optional)
-     */
-
-    ret = av_expr_parse_and_eval(&res, argv[0], var_names, s->var_values,
-                                 NULL, NULL, fun2_names, fun2,
-                                 &s->prng, 0, ctx);
-    if (ret < 0) {
-        av_log(ctx, AV_LOG_ERROR,
-               "Expression '%s' for the expr text expansion function is not valid\n",
-               argv[0]);
-        return ret;
-    }
-
-    if (!strchr("xXdu", argv[1][0])) {
-        av_log(ctx, AV_LOG_ERROR, "Invalid format '%c' specified,"
-                " allowed values: 'x', 'X', 'd', 'u'\n", argv[1][0]);
-        return AVERROR(EINVAL);
-    }
-
-    if (argc == 3) {
-        ret = sscanf(argv[2], "%u", &positions);
-        if (ret != 1) {
-            av_log(ctx, AV_LOG_ERROR, "expr_int_format(): Invalid number of positions"
-                    " to print: '%s'\n", argv[2]);
-            return AVERROR(EINVAL);
-        }
-    }
-
-    feclearexcept(FE_ALL_EXCEPT);
-    intval = res;
-#if defined(FE_INVALID) && defined(FE_OVERFLOW) && defined(FE_UNDERFLOW)
-    if ((ret = fetestexcept(FE_INVALID|FE_OVERFLOW|FE_UNDERFLOW))) {
-        av_log(ctx, AV_LOG_ERROR, "Conversion of floating-point result to int failed. Control register: 0x%08x. Conversion result: %d\n", ret, intval);
-        return AVERROR(EINVAL);
-    }
-#endif
-
-    if (argc == 3)
-        av_strlcatf(fmt_str, sizeof(fmt_str), "0%u", positions);
-    av_strlcatf(fmt_str, sizeof(fmt_str), "%c", argv[1][0]);
-
-    av_log(ctx, AV_LOG_DEBUG, "Formatting value %f (expr '%s') with spec '%s'\n",
-            res, argv[0], fmt_str);
-
-    av_bprintf(bp, fmt_str, intval);
-
-    return 0;
-}
-
-static const struct drawtext_function {
-    const char *name;
-    unsigned argc_min, argc_max;
-    int tag;                            /**< opaque argument to func */
-    int (*func)(AVFilterContext *, AVBPrint *, char *, unsigned, char **, int);
-} functions[] = {
-    { "expr",      1, 1, 0,   func_eval_expr },
-    { "e",         1, 1, 0,   func_eval_expr },
-    { "expr_int_format", 2, 3, 0, func_eval_expr_int_format },
-    { "eif",       2, 3, 0,   func_eval_expr_int_format },
-    { "pict_type", 0, 0, 0,   func_pict_type },
-    { "pts",       0, 3, 0,   func_pts      },
-    { "gmtime",    0, 1, 'G', func_strftime },
-    { "localtime", 0, 1, 'L', func_strftime },
-    { "frame_num", 0, 0, 0,   func_frame_num },
-    { "n",         0, 0, 0,   func_frame_num },
-    { "metadata",  1, 2, 0,   func_metadata },
-};
-
-static int eval_function(AVFilterContext *ctx, AVBPrint *bp, char *fct,
-                         unsigned argc, char **argv)
-{
-    unsigned i;
-
-    for (i = 0; i < FF_ARRAY_ELEMS(functions); i++) {
-        if (strcmp(fct, functions[i].name))
-            continue;
-        if (argc < functions[i].argc_min) {
-            av_log(ctx, AV_LOG_ERROR, "%%{%s} requires at least %d arguments\n",
-                   fct, functions[i].argc_min);
-            return AVERROR(EINVAL);
-        }
-        if (argc > functions[i].argc_max) {
-            av_log(ctx, AV_LOG_ERROR, "%%{%s} requires at most %d arguments\n",
-                   fct, functions[i].argc_max);
-            return AVERROR(EINVAL);
-        }
-        break;
-    }
-    if (i >= FF_ARRAY_ELEMS(functions)) {
-        av_log(ctx, AV_LOG_ERROR, "%%{%s} is not known\n", fct);
-        return AVERROR(EINVAL);
-    }
-    return functions[i].func(ctx, bp, fct, argc, argv, functions[i].tag);
-}
-
-static int expand_function(AVFilterContext *ctx, AVBPrint *bp, char **rtext)
-{
-    const char *text = *rtext;
-    char *argv[16] = { NULL };
-    unsigned argc = 0, i;
-    int ret;
-
-    if (*text != '{') {
-        av_log(ctx, AV_LOG_ERROR, "Stray %% near '%s'\n", text);
-        return AVERROR(EINVAL);
-    }
-    text++;
-    while (1) {
-        if (!(argv[argc++] = av_get_token(&text, ":}"))) {
-            ret = AVERROR(ENOMEM);
-            goto end;
-        }
-        if (!*text) {
-            av_log(ctx, AV_LOG_ERROR, "Unterminated %%{} near '%s'\n", *rtext);
-            ret = AVERROR(EINVAL);
-            goto end;
-        }
-        if (argc == FF_ARRAY_ELEMS(argv))
-            av_freep(&argv[--argc]); /* error will be caught later */
-        if (*text == '}')
-            break;
-        text++;
-    }
-
-    if ((ret = eval_function(ctx, bp, argv[0], argc - 1, argv + 1)) < 0)
-        goto end;
-    ret = 0;
-    *rtext = (char *)text + 1;
-
-end:
-    for (i = 0; i < argc; i++)
-        av_freep(&argv[i]);
-    return ret;
-}
-
-static int expand_text(AVFilterContext *ctx, char *text, AVBPrint *bp)
-{
-    int ret;
-
-    av_bprint_clear(bp);
-    while (*text) {
-        if (*text == '\\' && text[1]) {
-            av_bprint_chars(bp, text[1], 1);
-            text += 2;
-        } else if (*text == '%') {
-            text++;
-            if ((ret = expand_function(ctx, bp, &text)) < 0)
-                return ret;
-        } else {
-            av_bprint_chars(bp, *text, 1);
-            text++;
-        }
-    }
-    if (!av_bprint_is_complete(bp))
-        return AVERROR(ENOMEM);
-    return 0;
 }
 
 static void update_color_with_alpha(DrawTextContext *s, FFDrawColor *color, const FFDrawColor incolor)
@@ -1688,7 +1412,7 @@ static int measure_text(AVFilterContext *ctx, TextMetrics *metrics)
     for (i = 0, p = text; 1; i++) {
         GET_UTF8(code, *p ? *p++ : 0, code = 0xfffd; goto continue_on_failed;);
 continue_on_failed:
-        if (is_newline(code) || code == 0) {
+        if (ff_is_newline(code) || code == 0) {
             ++line_count;
             if (code == 0) {
                 break;
@@ -1729,7 +1453,7 @@ continue_on_failed:
         }
         GET_UTF8(code, *p ? *p++ : 0, code = 0xfffd; goto continue_on_failed2;);
 continue_on_failed2:
-        if (is_newline(code) || code == 0) {
+        if (ff_is_newline(code) || code == 0) {
             TextLine *cur_line = &s->lines[line_count];
             HarfbuzzData *hb = &cur_line->hb_data;
             cur_line->cluster_offset = line_offset;
@@ -1829,6 +1553,7 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame)
 {
     DrawTextContext *s = ctx->priv;
     AVFilterLink *inlink = ctx->inputs[0];
+    FilterLink *inl = ff_filter_link(inlink);
     int x = 0, y = 0, ret;
     int shift_x64, shift_y64;
     int x64, y64;
@@ -1861,7 +1586,7 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame)
         av_bprintf(bp, "%s", s->text);
         break;
     case EXP_NORMAL:
-        if ((ret = expand_text(ctx, s->text, &s->expanded_text)) < 0)
+        if ((ret = ff_expand_text(&s->expand_text, s->text, &s->expanded_text)) < 0)
             return ret;
         break;
     case EXP_STRFTIME:
@@ -1872,7 +1597,7 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame)
 
     if (s->tc_opt_string) {
         char tcbuf[AV_TIMECODE_STR_SIZE];
-        av_timecode_make_string(&s->tc, tcbuf, inlink->frame_count_out);
+        av_timecode_make_string(&s->tc, tcbuf, inl->frame_count_out);
         av_bprint_clear(bp);
         av_bprintf(bp, "%s%s", s->text, tcbuf);
     }
@@ -1883,7 +1608,7 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame)
     if (s->fontcolor_expr[0]) {
         /* If expression is set, evaluate and replace the static value */
         av_bprint_clear(&s->expanded_fontcolor);
-        if ((ret = expand_text(ctx, s->fontcolor_expr, &s->expanded_fontcolor)) < 0)
+        if ((ret = ff_expand_text(&s->expand_text, s->fontcolor_expr, &s->expanded_fontcolor)) < 0)
             return ret;
         if (!av_bprint_is_complete(&s->expanded_fontcolor))
             return AVERROR(ENOMEM);
@@ -2104,6 +1829,7 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame)
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
+    FilterLink *inl = ff_filter_link(inlink);
     AVFilterContext *ctx = inlink->dst;
     AVFilterLink *outlink = ctx->outputs[0];
     DrawTextContext *s = ctx->priv;
@@ -2124,8 +1850,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
         }
     }
 
-    if (s->reload && !(inlink->frame_count_out % s->reload)) {
-        if ((ret = load_textfile(ctx)) < 0) {
+    if (s->reload && !(inl->frame_count_out % s->reload)) {
+        if ((ret = ff_load_textfile(ctx, (const char *)s->textfile, &s->text, NULL)) < 0) {
             av_frame_free(&frame);
             return ret;
         }
@@ -2138,7 +1864,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 #endif
     }
 
-    s->var_values[VAR_N] = inlink->frame_count_out + s->start_number;
+    s->var_values[VAR_N] = inl->frame_count_out + s->start_number;
     s->var_values[VAR_T] = frame->pts == AV_NOPTS_VALUE ?
         NAN : frame->pts * av_q2d(inlink->time_base);
 
@@ -2147,15 +1873,6 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 FF_DISABLE_DEPRECATION_WARNINGS
     s->var_values[VAR_PKT_POS] = frame->pkt_pos;
     s->var_values[VAR_PKT_SIZE] = frame->pkt_size;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-#if FF_API_PKT_DURATION
-FF_DISABLE_DEPRECATION_WARNINGS
-    s->var_values[VAR_PKT_DURATION] = frame->pkt_duration * av_q2d(inlink->time_base);
-
-    if (frame->pkt_duration)
-        s->var_values[VAR_DURATION] = frame->pkt_duration * av_q2d(inlink->time_base);
-    else
 FF_ENABLE_DEPRECATION_WARNINGS
 #endif
     s->var_values[VAR_DURATION] = frame->duration * av_q2d(inlink->time_base);

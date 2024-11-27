@@ -28,20 +28,18 @@
  * GPU video surfaces, write the decoded frames to an output file.
  */
 
-#include "config.h"
-
 #include <stdio.h>
 
-#include "libavformat/avformat.h"
-#include "libavformat/avio.h"
+#include <libavformat/avformat.h>
+#include <libavformat/avio.h>
 
-#include "libavcodec/avcodec.h"
+#include <libavcodec/avcodec.h>
 
-#include "libavutil/buffer.h"
-#include "libavutil/error.h"
-#include "libavutil/hwcontext.h"
-#include "libavutil/hwcontext_qsv.h"
-#include "libavutil/mem.h"
+#include <libavutil/buffer.h>
+#include <libavutil/error.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_qsv.h>
+#include <libavutil/mem.h>
 
 static int get_format(AVCodecContext *avctx, const enum AVPixelFormat *pix_fmts)
 {

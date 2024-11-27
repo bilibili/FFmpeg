@@ -19,14 +19,14 @@
  */
 
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
-#include "libavutil/parseutils.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/xga_font_data.h"
 #include "avfilter.h"
 #include "drawutils.h"
+#include "filters.h"
 #include "formats.h"
-#include "internal.h"
 #include "video.h"
 
 typedef struct DatascopeContext {
@@ -62,15 +62,15 @@ static const AVOption datascope_options[] = {
     { "s",    "set output size", OFFSET(ow),   AV_OPT_TYPE_IMAGE_SIZE, {.str="hd720"}, 0, 0, FLAGS },
     { "x",    "set x offset", OFFSET(x),    AV_OPT_TYPE_INT, {.i64=0}, 0, INT_MAX, FLAGSR },
     { "y",    "set y offset", OFFSET(y),    AV_OPT_TYPE_INT, {.i64=0}, 0, INT_MAX, FLAGSR },
-    { "mode", "set scope mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=0}, 0, 2, FLAGSR, "mode" },
-    {   "mono",   NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGSR, "mode" },
-    {   "color",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGSR, "mode" },
-    {   "color2", NULL, 0, AV_OPT_TYPE_CONST, {.i64=2}, 0, 0, FLAGSR, "mode" },
+    { "mode", "set scope mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=0}, 0, 2, FLAGSR, .unit = "mode" },
+    {   "mono",   NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGSR, .unit = "mode" },
+    {   "color",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGSR, .unit = "mode" },
+    {   "color2", NULL, 0, AV_OPT_TYPE_CONST, {.i64=2}, 0, 0, FLAGSR, .unit = "mode" },
     { "axis",    "draw column/row numbers", OFFSET(axis), AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGSR },
     { "opacity", "set background opacity", OFFSET(opacity), AV_OPT_TYPE_FLOAT, {.dbl=0.75}, 0, 1, FLAGSR },
-    { "format", "set display number format", OFFSET(dformat), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGSR, "format" },
-    {   "hex",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGSR, "format" },
-    {   "dec",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGSR, "format" },
+    { "format", "set display number format", OFFSET(dformat), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGSR, .unit = "format" },
+    {   "hex",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGSR, .unit = "format" },
+    {   "dec",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGSR, .unit = "format" },
     { "components", "set components to display", OFFSET(components), AV_OPT_TYPE_INT, {.i64=15}, 1, 15, FLAGSR },
     { NULL }
 };
@@ -383,7 +383,7 @@ static int config_input(AVFilterLink *inlink)
     uint8_t alpha = s->opacity * 255;
 
     s->nb_planes = av_pix_fmt_count_planes(inlink->format);
-    ff_draw_init(&s->draw, inlink->format, 0);
+    ff_draw_init2(&s->draw, inlink->format, inlink->colorspace, inlink->color_range, 0);
     ff_draw_color(&s->draw, &s->white,  (uint8_t[]){ 255, 255, 255, 255} );
     ff_draw_color(&s->draw, &s->black,  (uint8_t[]){ 0, 0, 0, alpha} );
     ff_draw_color(&s->draw, &s->yellow, (uint8_t[]){ 255, 255, 0, 255} );
@@ -1038,6 +1038,7 @@ static void draw_scope(OscilloscopeContext *s, int x0, int y0, int x1, int y1,
 
 static int oscilloscope_filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
+    FilterLink *inl = ff_filter_link(inlink);
     AVFilterContext *ctx  = inlink->dst;
     OscilloscopeContext *s = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
@@ -1047,7 +1048,7 @@ static int oscilloscope_filter_frame(AVFilterLink *inlink, AVFrame *frame)
     int i, c;
 
     s->nb_values = 0;
-    draw_scope(s, s->x1, s->y1, s->x2, s->y2, frame, s->values, inlink->frame_count_in & 1);
+    draw_scope(s, s->x1, s->y1, s->x2, s->y2, frame, s->values, inl->frame_count_in & 1);
     ff_blend_rectangle(&s->draw, &s->dark, frame->data, frame->linesize,
                        frame->width, frame->height,
                        s->ox, s->oy, s->width, s->height + 20 * s->statistics);

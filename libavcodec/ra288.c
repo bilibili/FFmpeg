@@ -22,6 +22,7 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/float_dsp.h"
 #include "libavutil/internal.h"
+#include "libavutil/mem.h"
 #include "libavutil/mem_internal.h"
 
 #define BITSTREAM_READER_LE
@@ -30,7 +31,7 @@
 #include "codec_internal.h"
 #include "decode.h"
 #include "get_bits.h"
-#include "lpc.h"
+#include "lpc_functions.h"
 #include "ra288.h"
 
 #define MAX_BACKWARD_FILTER_ORDER  36

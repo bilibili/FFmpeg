@@ -32,7 +32,6 @@
 #include "drawutils.h"
 #include "filters.h"
 #include "formats.h"
-#include "internal.h"
 #include "audio.h"
 #include "video.h"
 
@@ -145,13 +144,14 @@ static av_cold int aconfig_props(AVFilterLink *outlink)
 
 static av_cold int config_props(AVFilterLink *outlink)
 {
+    FilterLink *l = ff_filter_link(outlink);
     AVFilterContext *ctx = outlink->src;
     AVSyncTestContext *s = ctx->priv;
 
     outlink->w = s->w;
     outlink->h = s->h;
     outlink->time_base = av_inv_q(s->frame_rate);
-    outlink->frame_rate = s->frame_rate;
+    l->frame_rate = s->frame_rate;
     outlink->sample_aspect_ratio = (AVRational) {1, 1};
     s->delay_min = av_mul_q(s->frame_rate, av_make_q(-1, 2));
     s->delay_max = av_mul_q(s->delay_min, av_make_q(-1, 1));
@@ -160,7 +160,7 @@ static av_cold int config_props(AVFilterLink *outlink)
     s->dir = 1;
     s->prev_intpart = INT64_MIN;
 
-    ff_draw_init(&s->draw, outlink->format, 0);
+    ff_draw_init2(&s->draw, outlink->format, outlink->colorspace, outlink->color_range, 0);
 
     ff_draw_color(&s->draw, &s->fg, s->rgba[0]);
     ff_draw_color(&s->draw, &s->bg, s->rgba[1]);

@@ -20,7 +20,6 @@
 
 #include "libavutil/tx.h"
 #include "avfilter.h"
-#include "internal.h"
 #include "audio.h"
 
 #undef ctype
@@ -29,6 +28,8 @@
 #undef HYPOT
 #undef SAMPLE_FORMAT
 #undef TX_TYPE
+#undef FABS
+#undef POW
 #if DEPTH == 32
 #define SAMPLE_FORMAT float
 #define SQRT sqrtf
@@ -36,6 +37,8 @@
 #define ctype AVComplexFloat
 #define ftype float
 #define TX_TYPE AV_TX_FLOAT_RDFT
+#define FABS fabsf
+#define POW powf
 #else
 #define SAMPLE_FORMAT double
 #define SQRT sqrt
@@ -43,191 +46,40 @@
 #define ctype AVComplexDouble
 #define ftype double
 #define TX_TYPE AV_TX_DOUBLE_RDFT
+#define FABS fabs
+#define POW pow
 #endif
 
 #define fn3(a,b)   a##_##b
 #define fn2(a,b)   fn3(a,b)
 #define fn(a)      fn2(a, SAMPLE_FORMAT)
 
-static void fn(draw_response)(AVFilterContext *ctx, AVFrame *out)
+static ftype fn(ir_gain)(AVFilterContext *ctx, AudioFIRContext *s,
+                         int cur_nb_taps, const ftype *time)
 {
-    AudioFIRContext *s = ctx->priv;
-    ftype *mag, *phase, *delay, min = FLT_MAX, max = FLT_MIN;
-    ftype min_delay = FLT_MAX, max_delay = FLT_MIN;
-    int prev_ymag = -1, prev_yphase = -1, prev_ydelay = -1;
-    char text[32];
-    int channel, i, x;
+    ftype ch_gain, sum = 0;
 
-    for (int y = 0; y < s->h; y++)
-        memset(out->data[0] + y * out->linesize[0], 0, s->w * 4);
+    if (s->ir_norm < 0.f) {
+        ch_gain = 1;
+    } else if (s->ir_norm == 0.f) {
+        for (int i = 0; i < cur_nb_taps; i++)
+            sum += time[i];
+        ch_gain = 1. / sum;
+    } else {
+        ftype ir_norm = s->ir_norm;
 
-    phase = av_malloc_array(s->w, sizeof(*phase));
-    mag = av_malloc_array(s->w, sizeof(*mag));
-    delay = av_malloc_array(s->w, sizeof(*delay));
-    if (!mag || !phase || !delay)
-        goto end;
-
-    channel = av_clip(s->ir_channel, 0, s->ir[s->selir]->ch_layout.nb_channels - 1);
-    for (i = 0; i < s->w; i++) {
-        const ftype *src = (const ftype *)s->ir[s->selir]->extended_data[channel];
-        double w = i * M_PI / (s->w - 1);
-        double div, real_num = 0., imag_num = 0., real = 0., imag = 0.;
-
-        for (x = 0; x < s->nb_taps[s->selir]; x++) {
-            real += cos(-x * w) * src[x];
-            imag += sin(-x * w) * src[x];
-            real_num += cos(-x * w) * src[x] * x;
-            imag_num += sin(-x * w) * src[x] * x;
-        }
-
-        mag[i] = hypot(real, imag);
-        phase[i] = atan2(imag, real);
-        div = real * real + imag * imag;
-        delay[i] = (real_num * real + imag_num * imag) / div;
-        min = fminf(min, mag[i]);
-        max = fmaxf(max, mag[i]);
-        min_delay = fminf(min_delay, delay[i]);
-        max_delay = fmaxf(max_delay, delay[i]);
+        for (int i = 0; i < cur_nb_taps; i++)
+            sum += POW(FABS(time[i]), ir_norm);
+        ch_gain = 1. / POW(sum, 1. / ir_norm);
     }
 
-    for (i = 0; i < s->w; i++) {
-        int ymag = mag[i] / max * (s->h - 1);
-        int ydelay = (delay[i] - min_delay) / (max_delay - min_delay) * (s->h - 1);
-        int yphase = (0.5 * (1. + phase[i] / M_PI)) * (s->h - 1);
-
-        ymag = s->h - 1 - av_clip(ymag, 0, s->h - 1);
-        yphase = s->h - 1 - av_clip(yphase, 0, s->h - 1);
-        ydelay = s->h - 1 - av_clip(ydelay, 0, s->h - 1);
-
-        if (prev_ymag < 0)
-            prev_ymag = ymag;
-        if (prev_yphase < 0)
-            prev_yphase = yphase;
-        if (prev_ydelay < 0)
-            prev_ydelay = ydelay;
-
-        draw_line(out, i,   ymag, FFMAX(i - 1, 0),   prev_ymag, 0xFFFF00FF);
-        draw_line(out, i, yphase, FFMAX(i - 1, 0), prev_yphase, 0xFF00FF00);
-        draw_line(out, i, ydelay, FFMAX(i - 1, 0), prev_ydelay, 0xFF00FFFF);
-
-        prev_ymag   = ymag;
-        prev_yphase = yphase;
-        prev_ydelay = ydelay;
-    }
-
-    if (s->w > 400 && s->h > 100) {
-        drawtext(out, 2, 2, "Max Magnitude:", 0xDDDDDDDD);
-        snprintf(text, sizeof(text), "%.2f", max);
-        drawtext(out, 15 * 8 + 2, 2, text, 0xDDDDDDDD);
-
-        drawtext(out, 2, 12, "Min Magnitude:", 0xDDDDDDDD);
-        snprintf(text, sizeof(text), "%.2f", min);
-        drawtext(out, 15 * 8 + 2, 12, text, 0xDDDDDDDD);
-
-        drawtext(out, 2, 22, "Max Delay:", 0xDDDDDDDD);
-        snprintf(text, sizeof(text), "%.2f", max_delay);
-        drawtext(out, 11 * 8 + 2, 22, text, 0xDDDDDDDD);
-
-        drawtext(out, 2, 32, "Min Delay:", 0xDDDDDDDD);
-        snprintf(text, sizeof(text), "%.2f", min_delay);
-        drawtext(out, 11 * 8 + 2, 32, text, 0xDDDDDDDD);
-    }
-
-end:
-    av_free(delay);
-    av_free(phase);
-    av_free(mag);
+    return ch_gain;
 }
 
-static int fn(get_power)(AVFilterContext *ctx, AudioFIRContext *s,
+static void fn(ir_scale)(AVFilterContext *ctx, AudioFIRContext *s,
                          int cur_nb_taps, int ch,
-                         ftype *time)
+                         ftype *time, ftype ch_gain)
 {
-    ftype ch_gain = 1;
-
-    switch (s->gtype) {
-    case -1:
-        ch_gain = 1;
-        break;
-    case 0:
-        {
-            ftype sum = 0;
-
-            for (int i = 0; i < cur_nb_taps; i++)
-                sum += FFABS(time[i]);
-            ch_gain = 1. / sum;
-        }
-        break;
-    case 1:
-        {
-            ftype sum = 0;
-
-            for (int i = 0; i < cur_nb_taps; i++)
-                sum += time[i];
-            ch_gain = 1. / sum;
-        }
-        break;
-    case 2:
-        {
-            ftype sum = 0;
-
-            for (int i = 0; i < cur_nb_taps; i++)
-                sum += time[i] * time[i];
-            ch_gain = 1. / SQRT(sum);
-        }
-        break;
-    case 3:
-    case 4:
-        {
-            ftype *inc, *outc, scale, power;
-            AVTXContext *tx;
-            av_tx_fn tx_fn;
-            int ret, size;
-
-            size = 1 << av_ceil_log2_c(cur_nb_taps);
-            inc = av_calloc(size + 2, sizeof(SAMPLE_FORMAT));
-            outc = av_calloc(size + 2, sizeof(SAMPLE_FORMAT));
-            if (!inc || !outc) {
-                av_free(outc);
-                av_free(inc);
-                break;
-            }
-
-            scale = 1.;
-            ret = av_tx_init(&tx, &tx_fn, TX_TYPE, 0, size, &scale, 0);
-            if (ret < 0) {
-                av_free(outc);
-                av_free(inc);
-                break;
-            }
-
-            {
-                memcpy(inc, time, cur_nb_taps * sizeof(SAMPLE_FORMAT));
-                tx_fn(tx, outc, inc, sizeof(SAMPLE_FORMAT));
-
-                power = 0;
-                if (s->gtype == 3) {
-                    for (int i = 0; i < size / 2 + 1; i++)
-                        power = FFMAX(power, HYPOT(outc[i * 2], outc[i * 2 + 1]));
-                } else {
-                    ftype sum = 0;
-                    for (int i = 0; i < size / 2 + 1; i++)
-                        sum += HYPOT(outc[i * 2], outc[i * 2 + 1]);
-                    power = SQRT(sum / (size / 2 + 1));
-                }
-
-                ch_gain = 1. / power;
-            }
-
-            av_tx_uninit(&tx);
-            av_free(outc);
-            av_free(inc);
-        }
-        break;
-    default:
-        return AVERROR_BUG;
-    }
-
     if (ch_gain != 1. || s->ir_gain != 1.) {
         ftype gain = ch_gain * s->ir_gain;
 
@@ -238,8 +90,6 @@ static int fn(get_power)(AVFilterContext *ctx, AudioFIRContext *s,
         s->fdsp->vector_dmul_scalar(time, time, gain, FFALIGN(cur_nb_taps, 8));
 #endif
     }
-
-    return 0;
 }
 
 static void fn(convert_channel)(AVFilterContext *ctx, AudioFIRContext *s, int ch,
@@ -390,4 +240,54 @@ static int fn(fir_quantum)(AVFilterContext *ctx, AVFrame *out, int ch, int ioffs
     }
 
     return 0;
+}
+
+static void fn(fir_quantums)(AVFilterContext *ctx, AudioFIRContext *s, AVFrame *out,
+                             int min_part_size, int ch, int offset,
+                             int prev_selir, int selir)
+{
+    if (ctx->is_disabled || s->prev_is_disabled) {
+        const ftype *in = (const ftype *)s->in->extended_data[ch] + offset;
+        const ftype *xfade0 = (const ftype *)s->xfade[0]->extended_data[ch];
+        const ftype *xfade1 = (const ftype *)s->xfade[1]->extended_data[ch];
+        ftype *src0 = (ftype *)s->fadein[0]->extended_data[ch];
+        ftype *src1 = (ftype *)s->fadein[1]->extended_data[ch];
+        ftype *dst = ((ftype *)out->extended_data[ch]) + offset;
+
+        if (ctx->is_disabled && !s->prev_is_disabled) {
+            memset(src0, 0, min_part_size * sizeof(ftype));
+            fn(fir_quantum)(ctx, s->fadein[0], ch, offset, 0, selir);
+            for (int n = 0; n < min_part_size; n++)
+                dst[n] = xfade1[n] * src0[n] + xfade0[n] * in[n];
+        } else if (!ctx->is_disabled && s->prev_is_disabled) {
+            memset(src1, 0, min_part_size * sizeof(ftype));
+            fn(fir_quantum)(ctx, s->fadein[1], ch, offset, 0, selir);
+            for (int n = 0; n < min_part_size; n++)
+                dst[n] = xfade1[n] * in[n] + xfade0[n] * src1[n];
+        } else {
+            memcpy(dst, in, sizeof(ftype) * min_part_size);
+        }
+    } else if (prev_selir != selir && s->loading[ch] != 0) {
+        const ftype *xfade0 = (const ftype *)s->xfade[0]->extended_data[ch];
+        const ftype *xfade1 = (const ftype *)s->xfade[1]->extended_data[ch];
+        ftype *src0 = (ftype *)s->fadein[0]->extended_data[ch];
+        ftype *src1 = (ftype *)s->fadein[1]->extended_data[ch];
+        ftype *dst = ((ftype *)out->extended_data[ch]) + offset;
+
+        memset(src0, 0, min_part_size * sizeof(ftype));
+        memset(src1, 0, min_part_size * sizeof(ftype));
+
+        fn(fir_quantum)(ctx, s->fadein[0], ch, offset, 0, prev_selir);
+        fn(fir_quantum)(ctx, s->fadein[1], ch, offset, 0, selir);
+
+        if (s->loading[ch] > s->max_offset[selir]) {
+            for (int n = 0; n < min_part_size; n++)
+                dst[n] = xfade1[n] * src0[n] + xfade0[n] * src1[n];
+            s->loading[ch] = 0;
+        } else {
+            memcpy(dst, src0, min_part_size * sizeof(ftype));
+        }
+    } else {
+        fn(fir_quantum)(ctx, out, ch, offset, offset, selir);
+    }
 }

@@ -21,9 +21,14 @@
 
 #include "vulkan_decode.h"
 
-const VkExtensionProperties ff_vk_dec_h264_ext = {
-    .extensionName = VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_EXTENSION_NAME,
-    .specVersion   = VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_SPEC_VERSION,
+const FFVulkanDecodeDescriptor ff_vk_dec_h264_desc = {
+    .codec_id         = AV_CODEC_ID_H264,
+    .decode_extension = FF_VK_EXT_VIDEO_DECODE_H264,
+    .decode_op        = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR,
+    .ext_props = {
+        .extensionName = VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_EXTENSION_NAME,
+        .specVersion   = VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_SPEC_VERSION,
+    },
 };
 
 typedef struct H264VulkanDecodePicture {
@@ -55,6 +60,7 @@ static int vk_h264_fill_pict(AVCodecContext *avctx, H264Picture **ref_src,
                              int dpb_slot_index)
 {
     FFVulkanDecodeContext *dec = avctx->internal->hwaccel_priv_data;
+    FFVulkanDecodeShared *ctx = dec->shared_ctx;
     H264VulkanDecodePicture *hp = pic->hwaccel_picture_private;
     FFVulkanDecodePicture *vkpic = &hp->vp;
 
@@ -90,7 +96,7 @@ static int vk_h264_fill_pict(AVCodecContext *avctx, H264Picture **ref_src,
         .sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR,
         .codedOffset = (VkOffset2D){ 0, 0 },
         .codedExtent = (VkExtent2D){ pic->f->width, pic->f->height },
-        .baseArrayLayer = dec->layered_dpb ? dpb_slot_index : 0,
+        .baseArrayLayer = ctx->common.layered_dpb ? dpb_slot_index : 0,
         .imageViewBinding = vkpic->img_view_ref,
     };
 
@@ -315,7 +321,7 @@ static int vk_h264_create_params(AVCodecContext *avctx, AVBufferRef **buf)
         .sType = VK_STRUCTURE_TYPE_VIDEO_SESSION_PARAMETERS_CREATE_INFO_KHR,
         .pNext = &h264_params,
         .videoSession = ctx->common.session,
-        .videoSessionParametersTemplate = NULL,
+        .videoSessionParametersTemplate = VK_NULL_HANDLE,
     };
 
     /* SPS list */

@@ -20,12 +20,13 @@
 
 #include "libavutil/common.h"
 #include "libavutil/float_dsp.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 
 #include "audio.h"
 #include "avfilter.h"
+#include "formats.h"
 #include "filters.h"
-#include "internal.h"
 
 enum OutModes {
     IN_MODE,
@@ -43,6 +44,7 @@ typedef struct AudioRLSContext {
     float lambda;
     float delta;
     int output_mode;
+    int precision;
 
     int kernel_size;
     AVFrame *offset;
@@ -53,6 +55,8 @@ typedef struct AudioRLSContext {
     AVFrame *u, *tmp;
 
     AVFrame *frame[2];
+
+    int (*filter_channels)(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs);
 
     AVFloatDSPContext *fdsp;
 } AudioRLSContext;
@@ -65,121 +69,36 @@ static const AVOption arls_options[] = {
     { "order",    "set the filter order",  OFFSET(order),  AV_OPT_TYPE_INT,   {.i64=16}, 1, INT16_MAX, A },
     { "lambda",   "set the filter lambda", OFFSET(lambda), AV_OPT_TYPE_FLOAT, {.dbl=1.f}, 0, 1, AT },
     { "delta",    "set the filter delta",  OFFSET(delta),  AV_OPT_TYPE_FLOAT, {.dbl=2.f}, 0, INT16_MAX, A },
-    { "out_mode", "set output mode",       OFFSET(output_mode), AV_OPT_TYPE_INT, {.i64=OUT_MODE}, 0, NB_OMODES-1, AT, "mode" },
-    {  "i", "input",   0, AV_OPT_TYPE_CONST, {.i64=IN_MODE},      0, 0, AT, "mode" },
-    {  "d", "desired", 0, AV_OPT_TYPE_CONST, {.i64=DESIRED_MODE}, 0, 0, AT, "mode" },
-    {  "o", "output",  0, AV_OPT_TYPE_CONST, {.i64=OUT_MODE},     0, 0, AT, "mode" },
-    {  "n", "noise",   0, AV_OPT_TYPE_CONST, {.i64=NOISE_MODE},   0, 0, AT, "mode" },
-    {  "e", "error",   0, AV_OPT_TYPE_CONST, {.i64=ERROR_MODE},   0, 0, AT, "mode" },
+    { "out_mode", "set output mode",       OFFSET(output_mode), AV_OPT_TYPE_INT, {.i64=OUT_MODE}, 0, NB_OMODES-1, AT, .unit = "mode" },
+    {  "i", "input",   0, AV_OPT_TYPE_CONST, {.i64=IN_MODE},      0, 0, AT, .unit = "mode" },
+    {  "d", "desired", 0, AV_OPT_TYPE_CONST, {.i64=DESIRED_MODE}, 0, 0, AT, .unit = "mode" },
+    {  "o", "output",  0, AV_OPT_TYPE_CONST, {.i64=OUT_MODE},     0, 0, AT, .unit = "mode" },
+    {  "n", "noise",   0, AV_OPT_TYPE_CONST, {.i64=NOISE_MODE},   0, 0, AT, .unit = "mode" },
+    {  "e", "error",   0, AV_OPT_TYPE_CONST, {.i64=ERROR_MODE},   0, 0, AT, .unit = "mode" },
+    { "precision", "set processing precision", OFFSET(precision),  AV_OPT_TYPE_INT,    {.i64=0},   0, 2, A, .unit = "precision" },
+    {   "auto",  "set auto processing precision",                  0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, A, .unit = "precision" },
+    {   "float", "set single-floating point processing precision", 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, A, .unit = "precision" },
+    {   "double","set double-floating point processing precision", 0, AV_OPT_TYPE_CONST, {.i64=2}, 0, 0, A, .unit = "precision" },
     { NULL }
 };
 
 AVFILTER_DEFINE_CLASS(arls);
 
-static float fir_sample(AudioRLSContext *s, float sample, float *delay,
-                        float *coeffs, float *tmp, int *offset)
+static int query_formats(const AVFilterContext *ctx,
+                         AVFilterFormatsConfig **cfg_in,
+                         AVFilterFormatsConfig **cfg_out)
 {
-    const int order = s->order;
-    float output;
+    const AudioRLSContext *s = ctx->priv;
+    static const enum AVSampleFormat sample_fmts[3][3] = {
+        { AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_DBLP, AV_SAMPLE_FMT_NONE },
+        { AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_NONE },
+        { AV_SAMPLE_FMT_DBLP, AV_SAMPLE_FMT_NONE },
+    };
+    int ret;
 
-    delay[*offset] = sample;
-
-    memcpy(tmp, coeffs + order - *offset, order * sizeof(float));
-
-    output = s->fdsp->scalarproduct_float(delay, tmp, s->kernel_size);
-
-    if (--(*offset) < 0)
-        *offset = order - 1;
-
-    return output;
-}
-
-static float process_sample(AudioRLSContext *s, float input, float desired, int ch)
-{
-    float *coeffs = (float *)s->coeffs->extended_data[ch];
-    float *delay = (float *)s->delay->extended_data[ch];
-    float *gains = (float *)s->gains->extended_data[ch];
-    float *tmp = (float *)s->tmp->extended_data[ch];
-    float *u = (float *)s->u->extended_data[ch];
-    float *p = (float *)s->p->extended_data[ch];
-    float *dp = (float *)s->dp->extended_data[ch];
-    int *offsetp = (int *)s->offset->extended_data[ch];
-    const int kernel_size = s->kernel_size;
-    const int order = s->order;
-    const float lambda = s->lambda;
-    int offset = *offsetp;
-    float g = lambda;
-    float output, e;
-
-    delay[offset + order] = input;
-
-    output = fir_sample(s, input, delay, coeffs, tmp, offsetp);
-    e = desired - output;
-
-    for (int i = 0, pos = offset; i < order; i++, pos++) {
-        const int ikernel_size = i * kernel_size;
-
-        u[i] = 0.f;
-        for (int k = 0, pos = offset; k < order; k++, pos++)
-            u[i] += p[ikernel_size + k] * delay[pos];
-
-        g += u[i] * delay[pos];
-    }
-
-    g = 1.f / g;
-
-    for (int i = 0; i < order; i++) {
-        const int ikernel_size = i * kernel_size;
-
-        gains[i] = u[i] * g;
-        coeffs[i] = coeffs[order + i] = coeffs[i] + gains[i] * e;
-        tmp[i] = 0.f;
-        for (int k = 0, pos = offset; k < order; k++, pos++)
-            tmp[i] += p[ikernel_size + k] * delay[pos];
-    }
-
-    for (int i = 0; i < order; i++) {
-        const int ikernel_size = i * kernel_size;
-
-        for (int k = 0; k < order; k++)
-            dp[ikernel_size + k] = gains[i] * tmp[k];
-    }
-
-    for (int i = 0; i < order; i++) {
-        const int ikernel_size = i * kernel_size;
-
-        for (int k = 0; k < order; k++)
-            p[ikernel_size + k] = (p[ikernel_size + k] - (dp[ikernel_size + k] + dp[kernel_size * k + i]) * 0.5f) * lambda;
-    }
-
-    switch (s->output_mode) {
-    case IN_MODE:       output = input;         break;
-    case DESIRED_MODE:  output = desired;       break;
-    case OUT_MODE:   output = desired - output; break;
-    case NOISE_MODE: output = input - output;   break;
-    case ERROR_MODE:                            break;
-    }
-    return output;
-}
-
-static int process_channels(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
-{
-    AudioRLSContext *s = ctx->priv;
-    AVFrame *out = arg;
-    const int start = (out->ch_layout.nb_channels * jobnr) / nb_jobs;
-    const int end = (out->ch_layout.nb_channels * (jobnr+1)) / nb_jobs;
-
-    for (int c = start; c < end; c++) {
-        const float *input = (const float *)s->frame[0]->extended_data[c];
-        const float *desired = (const float *)s->frame[1]->extended_data[c];
-        float *output = (float *)out->extended_data[c];
-
-        for (int n = 0; n < out->nb_samples; n++) {
-            output[n] = process_sample(s, input[n], desired[n], c);
-            if (ctx->is_disabled)
-                output[n] = input[n];
-        }
-    }
+    if ((ret = ff_set_common_formats_from_list2(ctx, cfg_in, cfg_out,
+                                                sample_fmts[s->precision])) < 0)
+        return ret;
 
     return 0;
 }
@@ -216,10 +135,11 @@ static int activate(AVFilterContext *ctx)
             return AVERROR(ENOMEM);
         }
 
-        ff_filter_execute(ctx, process_channels, out, NULL,
+        ff_filter_execute(ctx, s->filter_channels, out, NULL,
                           FFMIN(ctx->outputs[0]->ch_layout.nb_channels, ff_filter_get_nb_threads(ctx)));
 
         out->pts = s->frame[0]->pts;
+        out->duration = s->frame[0]->duration;
 
         av_frame_free(&s->frame[0]);
         av_frame_free(&s->frame[1]);
@@ -240,7 +160,7 @@ static int activate(AVFilterContext *ctx)
 
     if (ff_outlink_frame_wanted(ctx->outputs[0])) {
         for (i = 0; i < 2; i++) {
-            if (ff_inlink_queued_samples(ctx->inputs[i]) > 0)
+            if (s->frame[i] || ff_inlink_queued_samples(ctx->inputs[i]) > 0)
                 continue;
             ff_inlink_request_frame(ctx->inputs[i]);
             return 0;
@@ -248,6 +168,13 @@ static int activate(AVFilterContext *ctx)
     }
     return 0;
 }
+
+#define DEPTH 32
+#include "arls_template.c"
+
+#undef DEPTH
+#define DEPTH 64
+#include "arls_template.c"
 
 static int config_output(AVFilterLink *outlink)
 {
@@ -283,11 +210,27 @@ static int config_output(AVFilterLink *outlink)
             dst[0] = s->kernel_size - 1;
     }
 
-    for (int ch = 0; ch < s->p->ch_layout.nb_channels; ch++) {
-        float *dst = (float *)s->p->extended_data[ch];
+    switch (outlink->format) {
+    case AV_SAMPLE_FMT_DBLP:
+        for (int ch = 0; ch < s->p->ch_layout.nb_channels; ch++) {
+            double *dst = (double *)s->p->extended_data[ch];
 
-        for (int i = 0; i < s->kernel_size; i++)
-            dst[i * s->kernel_size + i] = s->delta;
+            for (int i = 0; i < s->kernel_size; i++)
+                dst[i * s->kernel_size + i] = s->delta;
+        }
+
+        s->filter_channels = filter_channels_double;
+        break;
+    case AV_SAMPLE_FMT_FLTP:
+        for (int ch = 0; ch < s->p->ch_layout.nb_channels; ch++) {
+            float *dst = (float *)s->p->extended_data[ch];
+
+            for (int i = 0; i < s->kernel_size; i++)
+                dst[i * s->kernel_size + i] = s->delta;
+        }
+
+        s->filter_channels = filter_channels_float;
+        break;
     }
 
     return 0;
@@ -348,7 +291,7 @@ const AVFilter ff_af_arls = {
     .activate       = activate,
     FILTER_INPUTS(inputs),
     FILTER_OUTPUTS(outputs),
-    FILTER_SINGLE_SAMPLEFMT(AV_SAMPLE_FMT_FLTP),
+    FILTER_QUERY_FUNC2(query_formats),
     .flags          = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL |
                       AVFILTER_FLAG_SLICE_THREADS,
     .process_command = ff_filter_process_command,

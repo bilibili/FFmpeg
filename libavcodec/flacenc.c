@@ -24,6 +24,7 @@
 #include "libavutil/crc.h"
 #include "libavutil/intmath.h"
 #include "libavutil/md5.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 
 #include "avcodec.h"
@@ -524,11 +525,10 @@ static void copy_samples(FlacEncodeContext *s, const void *samples)
 {
     int i, j, ch;
     FlacFrame *frame;
-    int shift = av_get_bytes_per_sample(s->avctx->sample_fmt) * 8 -
-                s->avctx->bits_per_raw_sample;
 
-#define COPY_SAMPLES(bits) do {                                     \
+#define COPY_SAMPLES(bits, shift0) do {                             \
     const int ## bits ## _t *samples0 = samples;                    \
+    const int shift = shift0;                                       \
     frame = &s->frame;                                              \
     for (i = 0, j = 0; i < frame->blocksize; i++)                   \
         for (ch = 0; ch < s->channels; ch++, j++)                   \
@@ -536,9 +536,9 @@ static void copy_samples(FlacEncodeContext *s, const void *samples)
 } while (0)
 
     if (s->avctx->sample_fmt == AV_SAMPLE_FMT_S16)
-        COPY_SAMPLES(16);
+        COPY_SAMPLES(16, 0);
     else
-        COPY_SAMPLES(32);
+        COPY_SAMPLES(32, 32 - s->avctx->bits_per_raw_sample);
 }
 
 
@@ -1712,27 +1712,27 @@ static av_cold int flac_encode_close(AVCodecContext *avctx)
 #define FLAGS AV_OPT_FLAG_ENCODING_PARAM | AV_OPT_FLAG_AUDIO_PARAM
 static const AVOption options[] = {
 { "lpc_coeff_precision", "LPC coefficient precision", offsetof(FlacEncodeContext, options.lpc_coeff_precision), AV_OPT_TYPE_INT, {.i64 = 15 }, 0, MAX_LPC_PRECISION, FLAGS },
-{ "lpc_type", "LPC algorithm", offsetof(FlacEncodeContext, options.lpc_type), AV_OPT_TYPE_INT, {.i64 = FF_LPC_TYPE_DEFAULT }, FF_LPC_TYPE_DEFAULT, FF_LPC_TYPE_NB-1, FLAGS, "lpc_type" },
-{ "none",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_LPC_TYPE_NONE },     INT_MIN, INT_MAX, FLAGS, "lpc_type" },
-{ "fixed",    NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_LPC_TYPE_FIXED },    INT_MIN, INT_MAX, FLAGS, "lpc_type" },
-{ "levinson", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_LPC_TYPE_LEVINSON }, INT_MIN, INT_MAX, FLAGS, "lpc_type" },
-{ "cholesky", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_LPC_TYPE_CHOLESKY }, INT_MIN, INT_MAX, FLAGS, "lpc_type" },
+{ "lpc_type", "LPC algorithm", offsetof(FlacEncodeContext, options.lpc_type), AV_OPT_TYPE_INT, {.i64 = FF_LPC_TYPE_DEFAULT }, FF_LPC_TYPE_DEFAULT, FF_LPC_TYPE_NB-1, FLAGS, .unit = "lpc_type" },
+{ "none",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_LPC_TYPE_NONE },     INT_MIN, INT_MAX, FLAGS, .unit = "lpc_type" },
+{ "fixed",    NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_LPC_TYPE_FIXED },    INT_MIN, INT_MAX, FLAGS, .unit = "lpc_type" },
+{ "levinson", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_LPC_TYPE_LEVINSON }, INT_MIN, INT_MAX, FLAGS, .unit = "lpc_type" },
+{ "cholesky", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = FF_LPC_TYPE_CHOLESKY }, INT_MIN, INT_MAX, FLAGS, .unit = "lpc_type" },
 { "lpc_passes", "Number of passes to use for Cholesky factorization during LPC analysis", offsetof(FlacEncodeContext, options.lpc_passes),  AV_OPT_TYPE_INT, {.i64 = 2 }, 1, INT_MAX, FLAGS },
 { "min_partition_order",  NULL, offsetof(FlacEncodeContext, options.min_partition_order),  AV_OPT_TYPE_INT, {.i64 = -1 },      -1, MAX_PARTITION_ORDER, FLAGS },
 { "max_partition_order",  NULL, offsetof(FlacEncodeContext, options.max_partition_order),  AV_OPT_TYPE_INT, {.i64 = -1 },      -1, MAX_PARTITION_ORDER, FLAGS },
-{ "prediction_order_method", "Search method for selecting prediction order", offsetof(FlacEncodeContext, options.prediction_order_method), AV_OPT_TYPE_INT, {.i64 = -1 }, -1, ORDER_METHOD_LOG, FLAGS, "predm" },
-{ "estimation", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_EST },    INT_MIN, INT_MAX, FLAGS, "predm" },
-{ "2level",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_2LEVEL }, INT_MIN, INT_MAX, FLAGS, "predm" },
-{ "4level",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_4LEVEL }, INT_MIN, INT_MAX, FLAGS, "predm" },
-{ "8level",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_8LEVEL }, INT_MIN, INT_MAX, FLAGS, "predm" },
-{ "search",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_SEARCH }, INT_MIN, INT_MAX, FLAGS, "predm" },
-{ "log",        NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_LOG },    INT_MIN, INT_MAX, FLAGS, "predm" },
-{ "ch_mode", "Stereo decorrelation mode", offsetof(FlacEncodeContext, options.ch_mode), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, FLAC_CHMODE_MID_SIDE, FLAGS, "ch_mode" },
-{ "auto",       NULL, 0, AV_OPT_TYPE_CONST, { .i64 = -1                      }, INT_MIN, INT_MAX, FLAGS, "ch_mode" },
-{ "indep",      NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FLAC_CHMODE_INDEPENDENT }, INT_MIN, INT_MAX, FLAGS, "ch_mode" },
-{ "left_side",  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FLAC_CHMODE_LEFT_SIDE   }, INT_MIN, INT_MAX, FLAGS, "ch_mode" },
-{ "right_side", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FLAC_CHMODE_RIGHT_SIDE  }, INT_MIN, INT_MAX, FLAGS, "ch_mode" },
-{ "mid_side",   NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FLAC_CHMODE_MID_SIDE    }, INT_MIN, INT_MAX, FLAGS, "ch_mode" },
+{ "prediction_order_method", "Search method for selecting prediction order", offsetof(FlacEncodeContext, options.prediction_order_method), AV_OPT_TYPE_INT, {.i64 = -1 }, -1, ORDER_METHOD_LOG, FLAGS, .unit = "predm" },
+{ "estimation", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_EST },    INT_MIN, INT_MAX, FLAGS, .unit = "predm" },
+{ "2level",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_2LEVEL }, INT_MIN, INT_MAX, FLAGS, .unit = "predm" },
+{ "4level",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_4LEVEL }, INT_MIN, INT_MAX, FLAGS, .unit = "predm" },
+{ "8level",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_8LEVEL }, INT_MIN, INT_MAX, FLAGS, .unit = "predm" },
+{ "search",     NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_SEARCH }, INT_MIN, INT_MAX, FLAGS, .unit = "predm" },
+{ "log",        NULL, 0, AV_OPT_TYPE_CONST, {.i64 = ORDER_METHOD_LOG },    INT_MIN, INT_MAX, FLAGS, .unit = "predm" },
+{ "ch_mode", "Stereo decorrelation mode", offsetof(FlacEncodeContext, options.ch_mode), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, FLAC_CHMODE_MID_SIDE, FLAGS, .unit = "ch_mode" },
+{ "auto",       NULL, 0, AV_OPT_TYPE_CONST, { .i64 = -1                      }, INT_MIN, INT_MAX, FLAGS, .unit = "ch_mode" },
+{ "indep",      NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FLAC_CHMODE_INDEPENDENT }, INT_MIN, INT_MAX, FLAGS, .unit = "ch_mode" },
+{ "left_side",  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FLAC_CHMODE_LEFT_SIDE   }, INT_MIN, INT_MAX, FLAGS, .unit = "ch_mode" },
+{ "right_side", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FLAC_CHMODE_RIGHT_SIDE  }, INT_MIN, INT_MAX, FLAGS, .unit = "ch_mode" },
+{ "mid_side",   NULL, 0, AV_OPT_TYPE_CONST, { .i64 = FLAC_CHMODE_MID_SIDE    }, INT_MIN, INT_MAX, FLAGS, .unit = "ch_mode" },
 { "exact_rice_parameters", "Calculate rice parameters exactly", offsetof(FlacEncodeContext, options.exact_rice_parameters), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
 { "multi_dim_quant",       "Multi-dimensional quantization",    offsetof(FlacEncodeContext, options.multi_dim_quant),       AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
 { "min_prediction_order", NULL, offsetof(FlacEncodeContext, options.min_prediction_order), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, MAX_LPC_ORDER, FLAGS },

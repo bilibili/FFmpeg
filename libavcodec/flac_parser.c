@@ -34,8 +34,7 @@
 
 #include "libavutil/attributes.h"
 #include "libavutil/crc.h"
-#include "bytestream.h"
-#include "parser.h"
+#include "libavutil/mem.h"
 #include "flac_parse.h"
 
 /** maximum number of adjacent headers that compare CRCs against each other   */
@@ -518,6 +517,8 @@ static int check_header_mismatch(FLACParseContext  *fpc,
         curr = header->next;
         for (i = 0; i < FLAC_MAX_SEQUENTIAL_HEADERS && curr != child; i++)
             curr = curr->next;
+
+        av_assert0(i < FLAC_MAX_SEQUENTIAL_HEADERS);
 
         if (header->link_penalty[i] < FLAC_HEADER_CRC_FAIL_PENALTY ||
             header->link_penalty[i] == FLAC_HEADER_NOT_PENALIZED_YET) {

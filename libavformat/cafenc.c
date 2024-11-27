@@ -26,6 +26,7 @@
 #include "mux.h"
 #include "libavutil/intfloat.h"
 #include "libavutil/dict.h"
+#include "libavutil/mem.h"
 
 #define FRAME_SIZE_OFFSET 40
 
@@ -117,11 +118,6 @@ static int caf_write_header(AVFormatContext *s)
     unsigned int codec_tag = ff_codec_get_tag(ff_codec_caf_tags, par->codec_id);
     int64_t chunk_size = 0;
     int frame_size = par->frame_size, sample_rate = par->sample_rate;
-
-    if (s->nb_streams != 1) {
-        av_log(s, AV_LOG_ERROR, "CAF files have exactly one stream\n");
-        return AVERROR(EINVAL);
-    }
 
     switch (par->codec_id) {
     case AV_CODEC_ID_AAC:
@@ -284,6 +280,8 @@ const FFOutputFormat ff_caf_muxer = {
     .priv_data_size = sizeof(CAFContext),
     .p.audio_codec  = AV_CODEC_ID_PCM_S16BE,
     .p.video_codec  = AV_CODEC_ID_NONE,
+    .p.subtitle_codec = AV_CODEC_ID_NONE,
+    .flags_internal   = FF_OFMT_FLAG_MAX_ONE_OF_EACH,
     .write_header   = caf_write_header,
     .write_packet   = caf_write_packet,
     .write_trailer  = caf_write_trailer,

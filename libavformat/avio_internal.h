@@ -89,11 +89,7 @@ void ffio_init_context(FFIOContext *s,
                   int write_flag,
                   void *opaque,
                   int (*read_packet)(void *opaque, uint8_t *buf, int buf_size),
-#if FF_API_AVIO_WRITE_NONCONST
-                  int (*write_packet)(void *opaque, uint8_t *buf, int buf_size),
-#else
                   int (*write_packet)(void *opaque, const uint8_t *buf, int buf_size),
-#endif
                   int64_t (*seek)(void *opaque, int64_t offset, int whence));
 
 /**
@@ -145,6 +141,27 @@ static av_always_inline void ffio_wfourcc(AVIOContext *pb, const uint8_t *s)
 int ffio_rewind_with_probe_data(AVIOContext *s, unsigned char **buf, int buf_size);
 
 uint64_t ffio_read_varlen(AVIOContext *bc);
+
+/**
+ * Read a unsigned integer coded as a variable number of up to eight
+ * little-endian bytes, where the MSB in a byte signals another byte
+ * must be read.
+ * All coded bytes are read, but values > UINT_MAX are truncated.
+ */
+unsigned int ffio_read_leb(AVIOContext *s);
+
+void ffio_write_leb(AVIOContext *s, unsigned val);
+
+/**
+ * Write a sequence of text lines, converting line endings.
+ * All input line endings (LF, CRLF, CR) are converted to the configured line ending.
+ * @param s The AVIOContext to write to
+ * @param buf The buffer to write
+ * @param size The size of the buffer, or <0 to use the full length of a null-terminated string
+ * @param ending The line ending sequence to convert to, or NULL for \n
+ */
+void ffio_write_lines(AVIOContext *s, const unsigned char *buf, int size,
+                      const unsigned char *ending);
 
 /**
  * Read size bytes from AVIOContext into buf.

@@ -31,9 +31,11 @@ extern const FFBitStreamFilter ff_av1_metadata_bsf;
 extern const FFBitStreamFilter ff_chomp_bsf;
 extern const FFBitStreamFilter ff_dump_extradata_bsf;
 extern const FFBitStreamFilter ff_dca_core_bsf;
+extern const FFBitStreamFilter ff_dovi_rpu_bsf;
 extern const FFBitStreamFilter ff_dts2pts_bsf;
 extern const FFBitStreamFilter ff_dv_error_marker_bsf;
 extern const FFBitStreamFilter ff_eac3_core_bsf;
+extern const FFBitStreamFilter ff_evc_frame_merge_bsf;
 extern const FFBitStreamFilter ff_extract_extradata_bsf;
 extern const FFBitStreamFilter ff_filter_units_bsf;
 extern const FFBitStreamFilter ff_h264_metadata_bsf;
@@ -46,7 +48,6 @@ extern const FFBitStreamFilter ff_imx_dump_header_bsf;
 extern const FFBitStreamFilter ff_media100_to_mjpegb_bsf;
 extern const FFBitStreamFilter ff_mjpeg2jpeg_bsf;
 extern const FFBitStreamFilter ff_mjpega_dump_header_bsf;
-extern const FFBitStreamFilter ff_mp3_header_decompress_bsf;
 extern const FFBitStreamFilter ff_mpeg2_metadata_bsf;
 extern const FFBitStreamFilter ff_mpeg4_unpack_bframes_bsf;
 extern const FFBitStreamFilter ff_mov2textsub_bsf;
@@ -58,6 +59,7 @@ extern const FFBitStreamFilter ff_pgs_frame_merge_bsf;
 extern const FFBitStreamFilter ff_prores_metadata_bsf;
 extern const FFBitStreamFilter ff_remove_extradata_bsf;
 extern const FFBitStreamFilter ff_setts_bsf;
+extern const FFBitStreamFilter ff_showinfo_bsf;
 extern const FFBitStreamFilter ff_text2movsub_bsf;
 extern const FFBitStreamFilter ff_trace_headers_bsf;
 extern const FFBitStreamFilter ff_truehd_core_bsf;
@@ -67,7 +69,6 @@ extern const FFBitStreamFilter ff_vp9_superframe_bsf;
 extern const FFBitStreamFilter ff_vp9_superframe_split_bsf;
 extern const FFBitStreamFilter ff_vvc_metadata_bsf;
 extern const FFBitStreamFilter ff_vvc_mp4toannexb_bsf;
-extern const FFBitStreamFilter ff_evc_frame_merge_bsf;
 
 #include "libavcodec/bsf_list.c"
 

@@ -35,6 +35,7 @@
 #include "libavutil/avassert.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/mathematics.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/dict.h"
 #include "libavutil/time.h"
@@ -540,11 +541,16 @@ static struct rendition *new_rendition(HLSContext *c, struct rendition_info *inf
     }
 
     if (info->assoc_language[0]) {
-        int langlen = strlen(rend->language);
+        size_t langlen = strlen(rend->language);
         if (langlen < sizeof(rend->language) - 3) {
+            size_t assoc_len;
             rend->language[langlen] = ',';
-            strncpy(rend->language + langlen + 1, info->assoc_language,
-                    sizeof(rend->language) - langlen - 2);
+            assoc_len = av_strlcpy(rend->language + langlen + 1,
+                                   info->assoc_language,
+                                   sizeof(rend->language) - langlen - 1);
+            if (langlen + assoc_len + 2 > sizeof(rend->language)) // truncation occurred
+                av_log(c->ctx, AV_LOG_WARNING, "Truncated rendition language: %s\n",
+                       info->assoc_language);
         }
     }
 
@@ -2093,12 +2099,15 @@ static int hls_read_header(AVFormatContext *s)
          * If encryption scheme is SAMPLE-AES and audio setup information is present in external audio track,
          * use that information to find the media format, otherwise probe input data
          */
+        seg = current_segment(pls);
         if (seg && seg->key_type == KEY_SAMPLE_AES && pls->is_id3_timestamped &&
             pls->audio_setup_info.codec_id != AV_CODEC_ID_NONE) {
-            void *iter = NULL;
-            while ((in_fmt = av_demuxer_iterate(&iter)))
-                if (in_fmt->raw_codec_id == pls->audio_setup_info.codec_id)
-                    break;
+            av_assert1(pls->audio_setup_info.codec_id == AV_CODEC_ID_AAC ||
+                       pls->audio_setup_info.codec_id == AV_CODEC_ID_AC3 ||
+                       pls->audio_setup_info.codec_id == AV_CODEC_ID_EAC3);
+            // Keep this list in sync with ff_hls_senc_read_audio_setup_info()
+            in_fmt = av_find_input_format(pls->audio_setup_info.codec_id == AV_CODEC_ID_AAC ? "aac" :
+                                          pls->audio_setup_info.codec_id == AV_CODEC_ID_AC3 ? "ac3" : "eac3");
         } else {
             pls->ctx->probesize = s->probesize > 0 ? s->probesize : 1024 * 4;
             pls->ctx->max_analyze_duration = s->max_analyze_duration > 0 ? s->max_analyze_duration : 4 * AV_TIME_BASE;
@@ -2119,6 +2128,7 @@ static int hls_read_header(AVFormatContext *s)
             av_free(url);
         }
 
+        seg = current_segment(pls);
         if (seg && seg->key_type == KEY_SAMPLE_AES) {
             if (strstr(in_fmt->name, "mov")) {
                 char key[33];
@@ -2165,6 +2175,7 @@ static int hls_read_header(AVFormatContext *s)
          * on us if they want to.
          */
         if (pls->is_id3_timestamped || (pls->n_renditions > 0 && pls->renditions[0]->type == AVMEDIA_TYPE_AUDIO)) {
+            seg = current_segment(pls);
             if (seg && seg->key_type == KEY_SAMPLE_AES && pls->audio_setup_info.setup_data_length > 0 &&
                 pls->ctx->nb_streams == 1)
                 ret = ff_hls_senc_parse_audio_setup_info(pls->ctx->streams[0], &pls->audio_setup_info);
@@ -2589,13 +2600,13 @@ static const AVClass hls_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const AVInputFormat ff_hls_demuxer = {
-    .name           = "hls",
-    .long_name      = NULL_IF_CONFIG_SMALL("Apple HTTP Live Streaming"),
-    .priv_class     = &hls_class,
+const FFInputFormat ff_hls_demuxer = {
+    .p.name         = "hls",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Apple HTTP Live Streaming"),
+    .p.priv_class   = &hls_class,
+    .p.flags        = AVFMT_NOGENSEARCH | AVFMT_TS_DISCONT | AVFMT_NO_BYTE_SEEK,
     .priv_data_size = sizeof(HLSContext),
-    .flags          = AVFMT_NOGENSEARCH | AVFMT_TS_DISCONT | AVFMT_NO_BYTE_SEEK,
-    .flags_internal = FF_FMT_INIT_CLEANUP,
+    .flags_internal = FF_INFMT_FLAG_INIT_CLEANUP,
     .read_probe     = hls_probe,
     .read_header    = hls_read_header,
     .read_packet    = hls_read_packet,

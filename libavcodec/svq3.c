@@ -44,6 +44,7 @@
 
 #include "libavutil/attributes.h"
 #include "libavutil/crc.h"
+#include "libavutil/mem.h"
 #include "libavutil/mem_internal.h"
 
 #include "codec_internal.h"
@@ -1399,6 +1400,9 @@ static int svq3_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
     if (svq3_decode_slice_header(avctx))
         return -1;
 
+    if (avpkt->size < s->mb_width * s->mb_height / 8)
+        return AVERROR_INVALIDDATA;
+
     s->pict_type = s->slice_type;
 
     if (s->pict_type != AV_PICTURE_TYPE_B)
@@ -1602,7 +1606,5 @@ const FFCodec ff_svq3_decoder = {
     .p.capabilities = AV_CODEC_CAP_DRAW_HORIZ_BAND |
                       AV_CODEC_CAP_DR1             |
                       AV_CODEC_CAP_DELAY,
-    .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUVJ420P,
-                                                     AV_PIX_FMT_NONE},
     .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
 };

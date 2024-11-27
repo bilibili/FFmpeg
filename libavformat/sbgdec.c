@@ -26,9 +26,11 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/log.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/time_internal.h"
 #include "avformat.h"
+#include "demux.h"
 #include "internal.h"
 
 #define SBG_SCALE (1 << 16)
@@ -386,7 +388,7 @@ static int parse_options(struct sbg_parser *p)
                 case 'L':
                     FORWARD_ERROR(parse_optarg(p, opt, &oarg));
                     r = str_to_time(oarg.s, &p->scs.opt_duration);
-                    if (oarg.e != oarg.s + r) {
+                    if (oarg.e != oarg.s + r || p->scs.opt_duration < 0) {
                         snprintf(p->err_msg, sizeof(p->err_msg),
                                  "syntax error for option -L");
                         return AVERROR_INVALIDDATA;
@@ -1529,15 +1531,15 @@ static const AVClass sbg_demuxer_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const AVInputFormat ff_sbg_demuxer = {
-    .name           = "sbg",
-    .long_name      = NULL_IF_CONFIG_SMALL("SBaGen binaural beats script"),
+const FFInputFormat ff_sbg_demuxer = {
+    .p.name         = "sbg",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("SBaGen binaural beats script"),
+    .p.extensions   = "sbg",
+    .p.priv_class   = &sbg_demuxer_class,
     .priv_data_size = sizeof(struct sbg_demuxer),
     .read_probe     = sbg_read_probe,
     .read_header    = sbg_read_header,
     .read_packet    = sbg_read_packet,
     .read_seek      = sbg_read_seek,
     .read_seek2     = sbg_read_seek2,
-    .extensions     = "sbg",
-    .priv_class     = &sbg_demuxer_class,
 };

@@ -112,7 +112,7 @@ typedef struct {
 /**
  * Insert a new subtitle event.
  *
- * @param event the subtitle line, may not be zero terminated
+ * @param event the subtitle line (not zero terminated) or NULL on not yet available event
  * @param len   the length of the event (in strlen() sense, so without '\0')
  * @param merge set to 1 if the current event should be concatenated with the
  *              previous one instead of adding a new entry, 0 otherwise
@@ -140,7 +140,7 @@ int ff_subtitles_queue_read_packet(FFDemuxSubtitlesQueue *q, AVPacket *pkt);
 
 /**
  * Update current_sub_idx to emulate a seek. Except the first parameter, it
- * matches AVInputFormat->read_seek2 prototypes.
+ * matches FFInputFormat->read_seek2 prototypes.
  */
 int ff_subtitles_queue_seek(FFDemuxSubtitlesQueue *q, AVFormatContext *s, int stream_index,
                             int64_t min_ts, int64_t ts, int64_t max_ts, int flags);

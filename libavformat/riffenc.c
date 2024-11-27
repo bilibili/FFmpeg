@@ -72,7 +72,7 @@ int ff_put_wav_header(AVFormatContext *s, AVIOContext *pb,
     }
 
     /* We use the known constant frame size for the codec if known, otherwise
-     * fall back on using AVCodecContext.frame_size, which is not as reliable
+     * fall back on using AVCodecParameters.frame_size, which is not as reliable
      * for indicating packet duration. */
     frame_size = av_get_audio_frame_duration2(par, par->block_align);
 
@@ -81,7 +81,7 @@ int ff_put_wav_header(AVFormatContext *s, AVIOContext *pb,
                             av_channel_layout_compare(&par->ch_layout, &(AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO)) ||
                            par->sample_rate > 48000 ||
                            par->codec_id == AV_CODEC_ID_EAC3 || par->codec_id == AV_CODEC_ID_DFPWM ||
-                           av_get_bits_per_sample(par->codec_id) > 16;
+                           (av_get_bits_per_sample(par->codec_id) > 16 && par->codec_tag != 0x0003);
 
     if (waveformatextensible)
         avio_wl16(pb, 0xfffe);

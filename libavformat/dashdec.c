@@ -22,6 +22,7 @@
 #include <libxml/parser.h>
 #include <time.h>
 #include "libavutil/bprint.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/time.h"
 #include "libavutil/parseutils.h"
@@ -2207,9 +2208,9 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
         if (cur->is_restart_needed) {
             cur->cur_seg_offset = 0;
             cur->init_sec_buf_read_offset = 0;
+            cur->is_restart_needed = 0;
             ff_format_io_close(cur->parent, &cur->input);
             ret = reopen_demux_for_component(s, cur);
-            cur->is_restart_needed = 0;
         }
     }
     return AVERROR_EOF;
@@ -2355,16 +2356,16 @@ static const AVClass dash_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const AVInputFormat ff_dash_demuxer = {
-    .name           = "dash",
-    .long_name      = NULL_IF_CONFIG_SMALL("Dynamic Adaptive Streaming over HTTP"),
-    .priv_class     = &dash_class,
+const FFInputFormat ff_dash_demuxer = {
+    .p.name         = "dash",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Dynamic Adaptive Streaming over HTTP"),
+    .p.priv_class   = &dash_class,
+    .p.flags        = AVFMT_NO_BYTE_SEEK,
     .priv_data_size = sizeof(DASHContext),
-    .flags_internal = FF_FMT_INIT_CLEANUP,
+    .flags_internal = FF_INFMT_FLAG_INIT_CLEANUP,
     .read_probe     = dash_probe,
     .read_header    = dash_read_header,
     .read_packet    = dash_read_packet,
     .read_close     = dash_close,
     .read_seek      = dash_read_seek,
-    .flags          = AVFMT_NO_BYTE_SEEK,
 };

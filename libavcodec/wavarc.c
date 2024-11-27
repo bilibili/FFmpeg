@@ -19,13 +19,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "avcodec.h"
 #include "codec_internal.h"
 #include "decode.h"
 #include "get_bits.h"
-#include "bytestream.h"
 #include "mathops.h"
 #include "unary.h"
 
@@ -374,7 +373,7 @@ static int decode_2slp(AVCodecContext *avctx,
                 for (int o = 0; o < order; o++)
                     sum += s->filter[ch][o] * (unsigned)samples[n + 70 - o - 1];
 
-                samples[n + 70] = get_srice(gb, k) + (sum >> 4);
+                samples[n + 70] = get_srice(gb, k) + (unsigned)(sum >> 4);
             }
             finished = 1;
             break;
@@ -414,7 +413,7 @@ static int ac_init(AVCodecContext *avctx,
 
 static uint16_t ac_get_prob(WavArcContext *s)
 {
-    return ((s->freq_range - 1) + (s->ac_value - s->ac_low) * s->freq_range) /
+    return ((s->freq_range - 1) + (s->ac_value - s->ac_low) * (unsigned)s->freq_range) /
            ((s->ac_high - s->ac_low) + 1U);
 }
 
@@ -439,8 +438,8 @@ static int ac_normalize(AVCodecContext *avctx, WavArcContext *s, GetBitContext *
         goto fail;
 
     range = (s->ac_high - s->ac_low) + 1;
-    s->ac_high = (range * s->range_high) / s->freq_range + s->ac_low - 1;
-    s->ac_low += (range * s->range_low)  / s->freq_range;
+    s->ac_high = (range * (unsigned)s->range_high) / s->freq_range + s->ac_low - 1;
+    s->ac_low += (range * (unsigned)s->range_low)  / s->freq_range;
 
     if (s->ac_high < s->ac_low)
         goto fail;
@@ -648,7 +647,7 @@ static int decode_5elp(AVCodecContext *avctx,
                 for (int o = 0; o < order; o++)
                     sum += s->filter[ch][o] * (unsigned)samples[n + 70 - o - 1];
 
-                samples[n + 70] += ac_out[n] + (sum >> 4);
+                samples[n + 70] += ac_out[n] + (unsigned)(sum >> 4);
             }
 
             for (int n = 0; n < 70; n++)
@@ -690,7 +689,7 @@ static int decode_5elp(AVCodecContext *avctx,
                 for (int o = 0; o < order; o++)
                     sum += s->filter[ch][o] * (unsigned)samples[n + 70 - o - 1];
 
-                samples[n + 70] += ac_out[n] + (sum >> 4);
+                samples[n + 70] += ac_out[n] + (unsigned)(sum >> 4);
             }
 
             for (int n = 0; n < 70; n++)

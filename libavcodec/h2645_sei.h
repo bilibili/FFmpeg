@@ -23,7 +23,9 @@
 
 #include "libavutil/buffer.h"
 #include "libavutil/frame.h"
+#include "libavutil/film_grain_params.h"
 
+#include "aom_film_grain.h"
 #include "avcodec.h"
 #include "bytestream.h"
 #include "codec_id.h"
@@ -47,6 +49,10 @@ typedef struct HEVCSEIDynamicHDRPlus {
 typedef struct HEVCSEIDynamicHDRVivid {
     AVBufferRef *info;
 } HEVCSEIDynamicHDRVivid;
+
+typedef struct HEVCSEILCEVC {
+    AVBufferRef *info;
+} HEVCSEILCEVC;
 
 typedef struct H2645SEIUnregistered {
     AVBufferRef **buf_ref;
@@ -124,6 +130,7 @@ typedef struct H2645SEI {
     H2645SEIAFD afd;
     HEVCSEIDynamicHDRPlus  dynamic_hdr_plus;     //< HEVC only
     HEVCSEIDynamicHDRVivid dynamic_hdr_vivid;    //< HEVC only
+    HEVCSEILCEVC lcevc;
     H2645SEIUnregistered unregistered;
     H2645SEIFramePacking frame_packing;
     H2645SEIDisplayOrientation display_orientation;
@@ -132,6 +139,7 @@ typedef struct H2645SEI {
     H2645SEIAmbientViewingEnvironment ambient_viewing_environment;
     H2645SEIMasteringDisplay mastering_display;
     H2645SEIContentLight content_light;
+    AVFilmGrainAFGS1Params aom_film_grain;
 } H2645SEI;
 
 enum {
@@ -164,5 +172,7 @@ int ff_h2645_sei_to_frame(AVFrame *frame, H2645SEI *sei,
                           AVCodecContext *avctx, const H2645VUI *vui,
                           unsigned bit_depth_luma, unsigned bit_depth_chroma,
                           int seed);
+
+int ff_h2645_sei_to_context(AVCodecContext *avctx, H2645SEI *sei);
 
 #endif /* AVCODEC_H2645_SEI_H */

@@ -22,21 +22,19 @@
 #include "config_components.h"
 
 #include "libavutil/buffer.h"
-#include "libavutil/common.h"
 #include "libavutil/crc.h"
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/log.h"
 #include "libavutil/dict.h"
-#include "libavutil/mathematics.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/avassert.h"
 #include "libavutil/dovi_meta.h"
-#include "libavcodec/avcodec.h"
 #include "libavcodec/bytestream.h"
 #include "libavcodec/defs.h"
 #include "libavcodec/get_bits.h"
-#include "libavcodec/opus.h"
+#include "libavcodec/opus/opus.h"
 #include "avformat.h"
 #include "mpegts.h"
 #include "internal.h"
@@ -167,6 +165,8 @@ struct MpegTSContext {
     int merge_pmt_versions;
     int max_packet_size;
 
+    int id;
+
     /******************************************/
     /* private mpegts data */
     /* scan context */
@@ -184,14 +184,20 @@ struct MpegTSContext {
 };
 
 #define MPEGTS_OPTIONS \
-    { "resync_size",   "set size limit for looking up a new synchronization", offsetof(MpegTSContext, resync_size), AV_OPT_TYPE_INT,  { .i64 =  MAX_RESYNC_SIZE}, 0, INT_MAX,  AV_OPT_FLAG_DECODING_PARAM }
+    { "resync_size",   "set size limit for looking up a new synchronization",  \
+        offsetof(MpegTSContext, resync_size), AV_OPT_TYPE_INT,                 \
+        { .i64 =  MAX_RESYNC_SIZE}, 0, INT_MAX, AV_OPT_FLAG_DECODING_PARAM },  \
+    { "ts_id", "transport stream id",                                          \
+        offsetof(MpegTSContext, id), AV_OPT_TYPE_INT,                          \
+        { .i64 = 0 }, 0, INT_MAX, AV_OPT_FLAG_EXPORT | AV_OPT_FLAG_READONLY }, \
+    { "ts_packetsize", "output option carrying the raw packet size",           \
+        offsetof(MpegTSContext, raw_packet_size), AV_OPT_TYPE_INT,             \
+        { .i64 = 0 }, 0, INT_MAX, AV_OPT_FLAG_EXPORT | AV_OPT_FLAG_READONLY }
 
 static const AVOption options[] = {
     MPEGTS_OPTIONS,
     {"fix_teletext_pts", "try to fix pts values of dvb teletext streams", offsetof(MpegTSContext, fix_teletext_pts), AV_OPT_TYPE_BOOL,
      {.i64 = 1}, 0, 1, AV_OPT_FLAG_DECODING_PARAM },
-    {"ts_packetsize", "output option carrying the raw packet size", offsetof(MpegTSContext, raw_packet_size), AV_OPT_TYPE_INT,
-     {.i64 = 0}, 0, 0, AV_OPT_FLAG_DECODING_PARAM | AV_OPT_FLAG_EXPORT | AV_OPT_FLAG_READONLY },
     {"scan_all_pmts", "scan and combine all PMTs", offsetof(MpegTSContext, scan_all_pmts), AV_OPT_TYPE_BOOL,
      {.i64 = -1}, -1, 1, AV_OPT_FLAG_DECODING_PARAM },
     {"skip_unknown_pmt", "skip PMTs for programs not advertised in the PAT", offsetof(MpegTSContext, skip_unknown_pmt), AV_OPT_TYPE_BOOL,
@@ -219,10 +225,6 @@ static const AVOption raw_options[] = {
     { "compute_pcr",   "compute exact PCR for each transport stream packet",
           offsetof(MpegTSContext, mpeg2ts_compute_pcr), AV_OPT_TYPE_BOOL,
           { .i64 = 0 }, 0, 1,  AV_OPT_FLAG_DECODING_PARAM },
-    { "ts_packetsize", "output option carrying the raw packet size",
-      offsetof(MpegTSContext, raw_packet_size), AV_OPT_TYPE_INT,
-      { .i64 = 0 }, 0, 0,
-      AV_OPT_FLAG_DECODING_PARAM | AV_OPT_FLAG_EXPORT | AV_OPT_FLAG_READONLY },
     { NULL },
 };
 
@@ -272,7 +274,7 @@ typedef struct PESContext {
     int merged_st;
 } PESContext;
 
-extern const AVInputFormat ff_mpegts_demuxer;
+extern const FFInputFormat ff_mpegts_demuxer;
 
 static struct Program * get_program(MpegTSContext *ts, unsigned int programid)
 {
@@ -812,6 +814,7 @@ static const StreamType ISO_types[] = {
     { 0x20, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_H264       },
     { 0x21, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_JPEG2000   },
     { 0x24, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_HEVC       },
+    { 0x33, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_VVC        },
     { 0x42, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_CAVS       },
     { 0xd1, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_DIRAC      },
     { 0xd2, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_AVS2       },
@@ -867,6 +870,7 @@ static const StreamType REGD_types[] = {
     { MKTAG('D', 'T', 'S', '3'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_DTS   },
     { MKTAG('E', 'A', 'C', '3'), AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_EAC3  },
     { MKTAG('H', 'E', 'V', 'C'), AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_HEVC  },
+    { MKTAG('V', 'V', 'C', ' '), AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_VVC   },
     { MKTAG('K', 'L', 'V', 'A'), AVMEDIA_TYPE_DATA,  AV_CODEC_ID_SMPTE_KLV },
     { MKTAG('V', 'A', 'N', 'C'), AVMEDIA_TYPE_DATA,  AV_CODEC_ID_SMPTE_2038 },
     { MKTAG('I', 'D', '3', ' '), AVMEDIA_TYPE_DATA,  AV_CODEC_ID_TIMED_ID3 },
@@ -916,11 +920,6 @@ static int mpegts_set_stream_info(AVStream *st, PESContext *pes,
     int old_codec_type = st->codecpar->codec_type;
     int old_codec_id   = st->codecpar->codec_id;
     int old_codec_tag  = st->codecpar->codec_tag;
-
-    if (avcodec_is_open(sti->avctx)) {
-        av_log(pes->stream, AV_LOG_DEBUG, "cannot set stream info, internal codec is open\n");
-        return 0;
-    }
 
     avpriv_set_pts_info(st, 33, 1, 90000);
     st->priv_data         = pes;
@@ -1306,8 +1305,11 @@ skip:
                     p += sl_header_bytes;
                     buf_size -= sl_header_bytes;
                 }
-                if (pes->st->codecpar->codec_id == AV_CODEC_ID_SMPTE_KLV && buf_size >= 5) {
-                    /* skip metadata access unit header */
+                if (pes->stream_type == STREAM_TYPE_METADATA &&
+                    pes->stream_id == STREAM_ID_METADATA_STREAM &&
+                    pes->st->codecpar->codec_id == AV_CODEC_ID_SMPTE_KLV &&
+                    buf_size >= 5) {
+                    /* skip metadata access unit header - see MISB ST 1402 */
                     pes->pes_header_size += 5;
                     p += 5;
                     buf_size -= 5;
@@ -2187,7 +2189,7 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
             uint32_t buf;
             AVDOVIDecoderConfigurationRecord *dovi;
             size_t dovi_size;
-            int dependency_pid;
+            int dependency_pid = -1; // Unset
 
             if (desc_end - *pp < 4) // (8 + 8 + 7 + 6 + 1 + 1 + 1) / 8
                 return AVERROR_INVALIDDATA;
@@ -2211,10 +2213,12 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
             if (desc_end - *pp >= 1) {  // 8 bits
                 buf = get8(pp, desc_end);
                 dovi->dv_bl_signal_compatibility_id = (buf >> 4) & 0x0f; // 4 bits
+                dovi->dv_md_compression = (buf >> 2) & 0x03; // 2 bits
             } else {
                 // 0 stands for None
                 // Dolby Vision V1.2.93 profiles and levels
                 dovi->dv_bl_signal_compatibility_id = 0;
+                dovi->dv_md_compression = AV_DOVI_COMPRESSION_NONE;
             }
 
             if (!av_packet_side_data_add(&st->codecpar->coded_side_data,
@@ -2226,14 +2230,16 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
             }
 
             av_log(fc, AV_LOG_TRACE, "DOVI, version: %d.%d, profile: %d, level: %d, "
-                   "rpu flag: %d, el flag: %d, bl flag: %d, dependency_pid: %d, compatibility id: %d\n",
+                   "rpu flag: %d, el flag: %d, bl flag: %d, dependency_pid: %d, "
+                   "compatibility id: %d, compression: %d\n",
                    dovi->dv_version_major, dovi->dv_version_minor,
                    dovi->dv_profile, dovi->dv_level,
                    dovi->rpu_present_flag,
                    dovi->el_present_flag,
                    dovi->bl_present_flag,
                    dependency_pid,
-                   dovi->dv_bl_signal_compatibility_id);
+                   dovi->dv_bl_signal_compatibility_id,
+                   dovi->dv_md_compression);
         }
         break;
     default:
@@ -2557,7 +2563,7 @@ static void pat_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
 
     if (skip_identical(h, tssf))
         return;
-    ts->stream->ts_id = h->id;
+    ts->id = h->id;
 
     for (;;) {
         sid = get16(&p, p_end);
@@ -2601,7 +2607,8 @@ static void pat_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
                     FFSWAP(struct Program, ts->prg[nb_prg], ts->prg[prg_idx]);
                 if (prg_idx >= nb_prg)
                     nb_prg++;
-            }
+            } else
+                nb_prg = 0;
         }
     }
     ts->nb_prg = nb_prg;
@@ -3120,7 +3127,7 @@ static int mpegts_read_header(AVFormatContext *s)
     ts->stream     = s;
     ts->auto_guess = 0;
 
-    if (s->iformat == &ff_mpegts_demuxer) {
+    if (s->iformat == &ff_mpegts_demuxer.p) {
         /* normal demux */
 
         /* first do a scan to get all the services */
@@ -3428,27 +3435,27 @@ void avpriv_mpegts_parse_close(MpegTSContext *ts)
     av_free(ts);
 }
 
-const AVInputFormat ff_mpegts_demuxer = {
-    .name           = "mpegts",
-    .long_name      = NULL_IF_CONFIG_SMALL("MPEG-TS (MPEG-2 Transport Stream)"),
+const FFInputFormat ff_mpegts_demuxer = {
+    .p.name         = "mpegts",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("MPEG-TS (MPEG-2 Transport Stream)"),
+    .p.flags        = AVFMT_SHOW_IDS | AVFMT_TS_DISCONT,
+    .p.priv_class   = &mpegts_class,
     .priv_data_size = sizeof(MpegTSContext),
     .read_probe     = mpegts_probe,
     .read_header    = mpegts_read_header,
     .read_packet    = mpegts_read_packet,
     .read_close     = mpegts_read_close,
     .read_timestamp = mpegts_get_dts,
-    .flags          = AVFMT_SHOW_IDS | AVFMT_TS_DISCONT,
-    .priv_class     = &mpegts_class,
 };
 
-const AVInputFormat ff_mpegtsraw_demuxer = {
-    .name           = "mpegtsraw",
-    .long_name      = NULL_IF_CONFIG_SMALL("raw MPEG-TS (MPEG-2 Transport Stream)"),
+const FFInputFormat ff_mpegtsraw_demuxer = {
+    .p.name         = "mpegtsraw",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("raw MPEG-TS (MPEG-2 Transport Stream)"),
+    .p.flags        = AVFMT_SHOW_IDS | AVFMT_TS_DISCONT,
+    .p.priv_class   = &mpegtsraw_class,
     .priv_data_size = sizeof(MpegTSContext),
     .read_header    = mpegts_read_header,
     .read_packet    = mpegts_raw_read_packet,
     .read_close     = mpegts_read_close,
     .read_timestamp = mpegts_get_dts,
-    .flags          = AVFMT_SHOW_IDS | AVFMT_TS_DISCONT,
-    .priv_class     = &mpegtsraw_class,
 };

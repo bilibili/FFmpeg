@@ -28,6 +28,7 @@
 #import <AudioToolbox/AudioToolbox.h>
 #include <pthread.h>
 
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavformat/internal.h"
 #include "libavformat/mux.h"
@@ -85,7 +86,11 @@ static av_cold int at_write_header(AVFormatContext *avctx)
     AudioObjectPropertyAddress prop;
     prop.mSelector = kAudioHardwarePropertyDevices;
     prop.mScope    = kAudioObjectPropertyScopeGlobal;
+#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 120000
+    prop.mElement  = kAudioObjectPropertyElementMain;
+#else
     prop.mElement  = kAudioObjectPropertyElementMaster;
+#endif
     err = AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &prop, 0, NULL, &data_size);
     if (check_status(avctx, &err, "AudioObjectGetPropertyDataSize devices"))
         return AVERROR(EINVAL);

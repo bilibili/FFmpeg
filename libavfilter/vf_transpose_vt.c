@@ -24,7 +24,8 @@
 #include "libavutil/hwcontext_videotoolbox.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
-#include "internal.h"
+
+#include "filters.h"
 #include "transpose.h"
 #include "video.h"
 
@@ -105,27 +106,30 @@ fail:
 
 static int transpose_vt_recreate_hw_ctx(AVFilterLink *outlink)
 {
+    FilterLink *outl = ff_filter_link(outlink);
     AVFilterContext *avctx = outlink->src;
     AVFilterLink *inlink = outlink->src->inputs[0];
+    FilterLink *inl = ff_filter_link(inlink);
     AVHWFramesContext *hw_frame_ctx_in;
     AVHWFramesContext *hw_frame_ctx_out;
     int err;
 
-    av_buffer_unref(&outlink->hw_frames_ctx);
+    av_buffer_unref(&outl->hw_frames_ctx);
 
-    hw_frame_ctx_in = (AVHWFramesContext *)inlink->hw_frames_ctx->data;
-    outlink->hw_frames_ctx = av_hwframe_ctx_alloc(hw_frame_ctx_in->device_ref);
-    hw_frame_ctx_out = (AVHWFramesContext *)outlink->hw_frames_ctx->data;
+    hw_frame_ctx_in = (AVHWFramesContext *)inl->hw_frames_ctx->data;
+    outl->hw_frames_ctx = av_hwframe_ctx_alloc(hw_frame_ctx_in->device_ref);
+    hw_frame_ctx_out = (AVHWFramesContext *)outl->hw_frames_ctx->data;
     hw_frame_ctx_out->format = AV_PIX_FMT_VIDEOTOOLBOX;
     hw_frame_ctx_out->sw_format = hw_frame_ctx_in->sw_format;
     hw_frame_ctx_out->width = outlink->w;
     hw_frame_ctx_out->height = outlink->h;
+    ((AVVTFramesContext *)hw_frame_ctx_out->hwctx)->color_range = ((AVVTFramesContext *)hw_frame_ctx_in->hwctx)->color_range;
 
     err = ff_filter_init_hw_frames(avctx, outlink, 1);
     if (err < 0)
         return err;
 
-    err = av_hwframe_ctx_init(outlink->hw_frames_ctx);
+    err = av_hwframe_ctx_init(outl->hw_frames_ctx);
     if (err < 0) {
         av_log(avctx, AV_LOG_ERROR,
                "Failed to init videotoolbox frame context, %s\n",
@@ -139,16 +143,18 @@ static int transpose_vt_recreate_hw_ctx(AVFilterLink *outlink)
 static int transpose_vt_config_output(AVFilterLink *outlink)
 {
     int err;
+    FilterLink *outl = ff_filter_link(outlink);
     AVFilterContext *avctx = outlink->src;
     TransposeVtContext *s  = avctx->priv;
     AVFilterLink *inlink = outlink->src->inputs[0];
+    FilterLink *inl = ff_filter_link(inlink);
     CFStringRef rotation = kVTRotation_0;
     CFBooleanRef vflip = kCFBooleanFalse;
     CFBooleanRef hflip = kCFBooleanFalse;
     int swap_w_h = 0;
 
-    av_buffer_unref(&outlink->hw_frames_ctx);
-    outlink->hw_frames_ctx = av_buffer_ref(inlink->hw_frames_ctx);
+    av_buffer_unref(&outl->hw_frames_ctx);
+    outl->hw_frames_ctx = av_buffer_ref(inl->hw_frames_ctx);
 
     if ((inlink->w >= inlink->h && s->passthrough == TRANSPOSE_PT_TYPE_LANDSCAPE) ||
         (inlink->w <= inlink->h && s->passthrough == TRANSPOSE_PT_TYPE_PORTRAIT)) {
@@ -224,7 +230,7 @@ static int transpose_vt_config_output(AVFilterLink *outlink)
 #define FLAGS (AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
 static const AVOption transpose_vt_options[] = {
     { "dir", "set transpose direction",
-            OFFSET(dir), AV_OPT_TYPE_INT, { .i64 = TRANSPOSE_CCLOCK_FLIP }, 0, 6, FLAGS, "dir" },
+            OFFSET(dir), AV_OPT_TYPE_INT, { .i64 = TRANSPOSE_CCLOCK_FLIP }, 0, 6, FLAGS, .unit = "dir" },
     { "cclock_flip", "rotate counter-clockwise with vertical flip",
             0, AV_OPT_TYPE_CONST, { .i64 = TRANSPOSE_CCLOCK_FLIP }, .flags=FLAGS, .unit = "dir" },
     { "clock", "rotate clockwise",
@@ -241,13 +247,13 @@ static const AVOption transpose_vt_options[] = {
             0, AV_OPT_TYPE_CONST, { .i64 = TRANSPOSE_VFLIP }, .flags=FLAGS, .unit = "dir" },
 
     { "passthrough", "do not apply transposition if the input matches the specified geometry",
-            OFFSET(passthrough), AV_OPT_TYPE_INT, { .i64=TRANSPOSE_PT_TYPE_NONE },  0, INT_MAX, FLAGS, "passthrough" },
+            OFFSET(passthrough), AV_OPT_TYPE_INT, { .i64=TRANSPOSE_PT_TYPE_NONE },  0, INT_MAX, FLAGS, .unit = "passthrough" },
     { "none", "always apply transposition",
-            0, AV_OPT_TYPE_CONST, { .i64 = TRANSPOSE_PT_TYPE_NONE }, INT_MIN, INT_MAX, FLAGS, "passthrough" },
+            0, AV_OPT_TYPE_CONST, { .i64 = TRANSPOSE_PT_TYPE_NONE }, INT_MIN, INT_MAX, FLAGS, .unit = "passthrough" },
     { "portrait", "preserve portrait geometry",
-            0, AV_OPT_TYPE_CONST, { .i64 = TRANSPOSE_PT_TYPE_PORTRAIT },  INT_MIN, INT_MAX, FLAGS, "passthrough" },
+            0, AV_OPT_TYPE_CONST, { .i64 = TRANSPOSE_PT_TYPE_PORTRAIT },  INT_MIN, INT_MAX, FLAGS, .unit = "passthrough" },
     { "landscape", "preserve landscape geometry",
-            0, AV_OPT_TYPE_CONST, { .i64 = TRANSPOSE_PT_TYPE_LANDSCAPE }, INT_MIN, INT_MAX, FLAGS, "passthrough" },
+            0, AV_OPT_TYPE_CONST, { .i64 = TRANSPOSE_PT_TYPE_LANDSCAPE }, INT_MIN, INT_MAX, FLAGS, .unit = "passthrough" },
 
     { NULL }
 };

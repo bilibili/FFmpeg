@@ -33,6 +33,7 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/libm.h"
 #include "libavutil/float_dsp.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "avcodec.h"
 #include "codec_internal.h"
@@ -537,11 +538,9 @@ static void adjust_frame_information(ChannelElement *cpe, int chans)
         maxsfb = 0;
         cpe->ch[ch].pulse.num_pulse = 0;
         for (w = 0; w < ics->num_windows; w += ics->group_len[w]) {
-            for (w2 =  0; w2 < ics->group_len[w]; w2++) {
-                for (cmaxsfb = ics->num_swb; cmaxsfb > 0 && cpe->ch[ch].zeroes[w*16+cmaxsfb-1]; cmaxsfb--)
-                    ;
-                maxsfb = FFMAX(maxsfb, cmaxsfb);
-            }
+            for (cmaxsfb = ics->num_swb; cmaxsfb > 0 && cpe->ch[ch].zeroes[w*16+cmaxsfb-1]; cmaxsfb--)
+                ;
+            maxsfb = FFMAX(maxsfb, cmaxsfb);
         }
         ics->max_sfb = maxsfb;
 
@@ -1210,9 +1209,6 @@ static av_cold int dsp_init(AVCodecContext *avctx, AACEncContext *s)
     if (!s->fdsp)
         return AVERROR(ENOMEM);
 
-    // window init
-    ff_aac_float_common_init();
-
     if ((ret = av_tx_init(&s->mdct1024, &s->mdct1024_fn, AV_TX_FLOAT_MDCT, 0,
                           1024, &scale, 0)) < 0)
         return ret;
@@ -1359,6 +1355,9 @@ static av_cold int aac_encode_init(AVCodecContext *avctx)
     if (s->channels > 3)
         s->options.mid_side = 0;
 
+    // Initialize static tables
+    ff_aac_float_common_init();
+
     if ((ret = dsp_init(avctx, s)) < 0)
         return ret;
 
@@ -1381,29 +1380,19 @@ static av_cold int aac_encode_init(AVCodecContext *avctx)
     ff_lpc_init(&s->lpc, 2*avctx->frame_size, TNS_MAX_ORDER, FF_LPC_TYPE_LEVINSON);
     s->random_state = 0x1f2e3d4c;
 
-    s->abs_pow34   = abs_pow34_v;
-    s->quant_bands = quantize_bands;
-
-#if ARCH_X86
-    ff_aac_dsp_init_x86(s);
-#endif
-
-#if HAVE_MIPSDSP
-    ff_aac_coder_init_mips(s);
-#endif
+    ff_aacenc_dsp_init(&s->aacdsp);
 
     ff_af_queue_init(avctx, &s->afq);
-    ff_aac_tableinit();
 
     return 0;
 }
 
 #define AACENC_FLAGS AV_OPT_FLAG_ENCODING_PARAM | AV_OPT_FLAG_AUDIO_PARAM
 static const AVOption aacenc_options[] = {
-    {"aac_coder", "Coding algorithm", offsetof(AACEncContext, options.coder), AV_OPT_TYPE_INT, {.i64 = AAC_CODER_TWOLOOP}, 0, AAC_CODER_NB-1, AACENC_FLAGS, "coder"},
-        {"anmr",     "ANMR method",               0, AV_OPT_TYPE_CONST, {.i64 = AAC_CODER_ANMR},    INT_MIN, INT_MAX, AACENC_FLAGS, "coder"},
-        {"twoloop",  "Two loop searching method", 0, AV_OPT_TYPE_CONST, {.i64 = AAC_CODER_TWOLOOP}, INT_MIN, INT_MAX, AACENC_FLAGS, "coder"},
-        {"fast",     "Default fast search",       0, AV_OPT_TYPE_CONST, {.i64 = AAC_CODER_FAST},    INT_MIN, INT_MAX, AACENC_FLAGS, "coder"},
+    {"aac_coder", "Coding algorithm", offsetof(AACEncContext, options.coder), AV_OPT_TYPE_INT, {.i64 = AAC_CODER_TWOLOOP}, 0, AAC_CODER_NB-1, AACENC_FLAGS, .unit = "coder"},
+        {"anmr",     "ANMR method",               0, AV_OPT_TYPE_CONST, {.i64 = AAC_CODER_ANMR},    INT_MIN, INT_MAX, AACENC_FLAGS, .unit = "coder"},
+        {"twoloop",  "Two loop searching method", 0, AV_OPT_TYPE_CONST, {.i64 = AAC_CODER_TWOLOOP}, INT_MIN, INT_MAX, AACENC_FLAGS, .unit = "coder"},
+        {"fast",     "Fast search",               0, AV_OPT_TYPE_CONST, {.i64 = AAC_CODER_FAST},    INT_MIN, INT_MAX, AACENC_FLAGS, .unit = "coder"},
     {"aac_ms", "Force M/S stereo coding", offsetof(AACEncContext, options.mid_side), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, AACENC_FLAGS},
     {"aac_is", "Intensity stereo coding", offsetof(AACEncContext, options.intensity_stereo), AV_OPT_TYPE_BOOL, {.i64 = 1}, -1, 1, AACENC_FLAGS},
     {"aac_pns", "Perceptual noise substitution", offsetof(AACEncContext, options.pns), AV_OPT_TYPE_BOOL, {.i64 = 1}, -1, 1, AACENC_FLAGS},

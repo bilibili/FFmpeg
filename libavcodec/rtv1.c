@@ -113,6 +113,8 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *p,
 
     width = bytestream2_get_le32(&gb);
     height = bytestream2_get_le32(&gb);
+    if (width > INT_MAX-4U || height > INT_MAX-4U)
+        return AVERROR_INVALIDDATA;
     ret = ff_set_dimensions(avctx, FFALIGN(width, 4), FFALIGN(height, 4));
     if (ret < 0)
         return ret;
@@ -129,9 +131,6 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *p,
     ret = decode_rtv1(&gb, dst, linesize, width, height, flags, dsp->dxt1_block);
     if (ret < 0)
         return ret;
-
-    p->pict_type = AV_PICTURE_TYPE_I;
-    p->flags |= AV_FRAME_FLAG_KEY;
 
     *got_frame = 1;
 

@@ -23,7 +23,6 @@
 #include "libavutil/pixdesc.h"
 #include "libavutil/pixfmt.h"
 #include "avfilter.h"
-#include "internal.h"
 #include "filters.h"
 #include "video.h"
 
@@ -169,66 +168,66 @@ static av_cold void uninit(AVFilterContext *ctx)
 #define FLAGS (AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
 
 static const AVOption xfade_options[] = {
-    { "transition", "set cross fade transition", OFFSET(transition), AV_OPT_TYPE_INT, {.i64=FADE}, -1, NB_TRANSITIONS-1, FLAGS, "transition" },
-    {   "custom",    "custom transition",     0, AV_OPT_TYPE_CONST, {.i64=CUSTOM},    0, 0, FLAGS, "transition" },
-    {   "fade",      "fade transition",       0, AV_OPT_TYPE_CONST, {.i64=FADE},      0, 0, FLAGS, "transition" },
-    {   "wipeleft",  "wipe left transition",  0, AV_OPT_TYPE_CONST, {.i64=WIPELEFT},  0, 0, FLAGS, "transition" },
-    {   "wiperight", "wipe right transition", 0, AV_OPT_TYPE_CONST, {.i64=WIPERIGHT}, 0, 0, FLAGS, "transition" },
-    {   "wipeup",    "wipe up transition",    0, AV_OPT_TYPE_CONST, {.i64=WIPEUP},    0, 0, FLAGS, "transition" },
-    {   "wipedown",  "wipe down transition",  0, AV_OPT_TYPE_CONST, {.i64=WIPEDOWN},  0, 0, FLAGS, "transition" },
-    {   "slideleft",  "slide left transition",  0, AV_OPT_TYPE_CONST, {.i64=SLIDELEFT},  0, 0, FLAGS, "transition" },
-    {   "slideright", "slide right transition", 0, AV_OPT_TYPE_CONST, {.i64=SLIDERIGHT}, 0, 0, FLAGS, "transition" },
-    {   "slideup",    "slide up transition",    0, AV_OPT_TYPE_CONST, {.i64=SLIDEUP},    0, 0, FLAGS, "transition" },
-    {   "slidedown",  "slide down transition",  0, AV_OPT_TYPE_CONST, {.i64=SLIDEDOWN},  0, 0, FLAGS, "transition" },
-    {   "circlecrop", "circle crop transition", 0, AV_OPT_TYPE_CONST, {.i64=CIRCLECROP}, 0, 0, FLAGS, "transition" },
-    {   "rectcrop",   "rect crop transition",   0, AV_OPT_TYPE_CONST, {.i64=RECTCROP},   0, 0, FLAGS, "transition" },
-    {   "distance",   "distance transition",    0, AV_OPT_TYPE_CONST, {.i64=DISTANCE},   0, 0, FLAGS, "transition" },
-    {   "fadeblack",  "fadeblack transition",   0, AV_OPT_TYPE_CONST, {.i64=FADEBLACK},  0, 0, FLAGS, "transition" },
-    {   "fadewhite",  "fadewhite transition",   0, AV_OPT_TYPE_CONST, {.i64=FADEWHITE},  0, 0, FLAGS, "transition" },
-    {   "radial",     "radial transition",      0, AV_OPT_TYPE_CONST, {.i64=RADIAL},     0, 0, FLAGS, "transition" },
-    {   "smoothleft", "smoothleft transition",  0, AV_OPT_TYPE_CONST, {.i64=SMOOTHLEFT}, 0, 0, FLAGS, "transition" },
-    {   "smoothright","smoothright transition", 0, AV_OPT_TYPE_CONST, {.i64=SMOOTHRIGHT},0, 0, FLAGS, "transition" },
-    {   "smoothup",   "smoothup transition",    0, AV_OPT_TYPE_CONST, {.i64=SMOOTHUP},   0, 0, FLAGS, "transition" },
-    {   "smoothdown", "smoothdown transition",  0, AV_OPT_TYPE_CONST, {.i64=SMOOTHDOWN}, 0, 0, FLAGS, "transition" },
-    {   "circleopen", "circleopen transition",  0, AV_OPT_TYPE_CONST, {.i64=CIRCLEOPEN}, 0, 0, FLAGS, "transition" },
-    {   "circleclose","circleclose transition", 0, AV_OPT_TYPE_CONST, {.i64=CIRCLECLOSE},0, 0, FLAGS, "transition" },
-    {   "vertopen",   "vert open transition",   0, AV_OPT_TYPE_CONST, {.i64=VERTOPEN},   0, 0, FLAGS, "transition" },
-    {   "vertclose",  "vert close transition",  0, AV_OPT_TYPE_CONST, {.i64=VERTCLOSE},  0, 0, FLAGS, "transition" },
-    {   "horzopen",   "horz open transition",   0, AV_OPT_TYPE_CONST, {.i64=HORZOPEN},   0, 0, FLAGS, "transition" },
-    {   "horzclose",  "horz close transition",  0, AV_OPT_TYPE_CONST, {.i64=HORZCLOSE},  0, 0, FLAGS, "transition" },
-    {   "dissolve",   "dissolve transition",    0, AV_OPT_TYPE_CONST, {.i64=DISSOLVE},   0, 0, FLAGS, "transition" },
-    {   "pixelize",   "pixelize transition",    0, AV_OPT_TYPE_CONST, {.i64=PIXELIZE},   0, 0, FLAGS, "transition" },
-    {   "diagtl",     "diag tl transition",     0, AV_OPT_TYPE_CONST, {.i64=DIAGTL},     0, 0, FLAGS, "transition" },
-    {   "diagtr",     "diag tr transition",     0, AV_OPT_TYPE_CONST, {.i64=DIAGTR},     0, 0, FLAGS, "transition" },
-    {   "diagbl",     "diag bl transition",     0, AV_OPT_TYPE_CONST, {.i64=DIAGBL},     0, 0, FLAGS, "transition" },
-    {   "diagbr",     "diag br transition",     0, AV_OPT_TYPE_CONST, {.i64=DIAGBR},     0, 0, FLAGS, "transition" },
-    {   "hlslice",    "hl slice transition",    0, AV_OPT_TYPE_CONST, {.i64=HLSLICE},    0, 0, FLAGS, "transition" },
-    {   "hrslice",    "hr slice transition",    0, AV_OPT_TYPE_CONST, {.i64=HRSLICE},    0, 0, FLAGS, "transition" },
-    {   "vuslice",    "vu slice transition",    0, AV_OPT_TYPE_CONST, {.i64=VUSLICE},    0, 0, FLAGS, "transition" },
-    {   "vdslice",    "vd slice transition",    0, AV_OPT_TYPE_CONST, {.i64=VDSLICE},    0, 0, FLAGS, "transition" },
-    {   "hblur",      "hblur transition",       0, AV_OPT_TYPE_CONST, {.i64=HBLUR},      0, 0, FLAGS, "transition" },
-    {   "fadegrays",  "fadegrays transition",   0, AV_OPT_TYPE_CONST, {.i64=FADEGRAYS},  0, 0, FLAGS, "transition" },
-    {   "wipetl",     "wipe tl transition",     0, AV_OPT_TYPE_CONST, {.i64=WIPETL},     0, 0, FLAGS, "transition" },
-    {   "wipetr",     "wipe tr transition",     0, AV_OPT_TYPE_CONST, {.i64=WIPETR},     0, 0, FLAGS, "transition" },
-    {   "wipebl",     "wipe bl transition",     0, AV_OPT_TYPE_CONST, {.i64=WIPEBL},     0, 0, FLAGS, "transition" },
-    {   "wipebr",     "wipe br transition",     0, AV_OPT_TYPE_CONST, {.i64=WIPEBR},     0, 0, FLAGS, "transition" },
-    {   "squeezeh",   "squeeze h transition",   0, AV_OPT_TYPE_CONST, {.i64=SQUEEZEH},   0, 0, FLAGS, "transition" },
-    {   "squeezev",   "squeeze v transition",   0, AV_OPT_TYPE_CONST, {.i64=SQUEEZEV},   0, 0, FLAGS, "transition" },
-    {   "zoomin",     "zoom in transition",     0, AV_OPT_TYPE_CONST, {.i64=ZOOMIN},     0, 0, FLAGS, "transition" },
-    {   "fadefast",   "fast fade transition",   0, AV_OPT_TYPE_CONST, {.i64=FADEFAST},   0, 0, FLAGS, "transition" },
-    {   "fadeslow",   "slow fade transition",   0, AV_OPT_TYPE_CONST, {.i64=FADESLOW},   0, 0, FLAGS, "transition" },
-    {   "hlwind",     "hl wind transition",     0, AV_OPT_TYPE_CONST, {.i64=HLWIND},     0, 0, FLAGS, "transition" },
-    {   "hrwind",     "hr wind transition",     0, AV_OPT_TYPE_CONST, {.i64=HRWIND},     0, 0, FLAGS, "transition" },
-    {   "vuwind",     "vu wind transition",     0, AV_OPT_TYPE_CONST, {.i64=VUWIND},     0, 0, FLAGS, "transition" },
-    {   "vdwind",     "vd wind transition",     0, AV_OPT_TYPE_CONST, {.i64=VDWIND},     0, 0, FLAGS, "transition" },
-    {   "coverleft",  "cover left transition",  0, AV_OPT_TYPE_CONST, {.i64=COVERLEFT},  0, 0, FLAGS, "transition" },
-    {   "coverright", "cover right transition", 0, AV_OPT_TYPE_CONST, {.i64=COVERRIGHT}, 0, 0, FLAGS, "transition" },
-    {   "coverup",    "cover up transition",    0, AV_OPT_TYPE_CONST, {.i64=COVERUP},    0, 0, FLAGS, "transition" },
-    {   "coverdown",  "cover down transition",  0, AV_OPT_TYPE_CONST, {.i64=COVERDOWN},  0, 0, FLAGS, "transition" },
-    {   "revealleft", "reveal left transition", 0, AV_OPT_TYPE_CONST, {.i64=REVEALLEFT}, 0, 0, FLAGS, "transition" },
-    {   "revealright","reveal right transition",0, AV_OPT_TYPE_CONST, {.i64=REVEALRIGHT},0, 0, FLAGS, "transition" },
-    {   "revealup",   "reveal up transition",   0, AV_OPT_TYPE_CONST, {.i64=REVEALUP},   0, 0, FLAGS, "transition" },
-    {   "revealdown", "reveal down transition", 0, AV_OPT_TYPE_CONST, {.i64=REVEALDOWN}, 0, 0, FLAGS, "transition" },
+    { "transition", "set cross fade transition", OFFSET(transition), AV_OPT_TYPE_INT, {.i64=FADE}, -1, NB_TRANSITIONS-1, FLAGS, .unit = "transition" },
+    {   "custom",    "custom transition",     0, AV_OPT_TYPE_CONST, {.i64=CUSTOM},    0, 0, FLAGS, .unit = "transition" },
+    {   "fade",      "fade transition",       0, AV_OPT_TYPE_CONST, {.i64=FADE},      0, 0, FLAGS, .unit = "transition" },
+    {   "wipeleft",  "wipe left transition",  0, AV_OPT_TYPE_CONST, {.i64=WIPELEFT},  0, 0, FLAGS, .unit = "transition" },
+    {   "wiperight", "wipe right transition", 0, AV_OPT_TYPE_CONST, {.i64=WIPERIGHT}, 0, 0, FLAGS, .unit = "transition" },
+    {   "wipeup",    "wipe up transition",    0, AV_OPT_TYPE_CONST, {.i64=WIPEUP},    0, 0, FLAGS, .unit = "transition" },
+    {   "wipedown",  "wipe down transition",  0, AV_OPT_TYPE_CONST, {.i64=WIPEDOWN},  0, 0, FLAGS, .unit = "transition" },
+    {   "slideleft",  "slide left transition",  0, AV_OPT_TYPE_CONST, {.i64=SLIDELEFT},  0, 0, FLAGS, .unit = "transition" },
+    {   "slideright", "slide right transition", 0, AV_OPT_TYPE_CONST, {.i64=SLIDERIGHT}, 0, 0, FLAGS, .unit = "transition" },
+    {   "slideup",    "slide up transition",    0, AV_OPT_TYPE_CONST, {.i64=SLIDEUP},    0, 0, FLAGS, .unit = "transition" },
+    {   "slidedown",  "slide down transition",  0, AV_OPT_TYPE_CONST, {.i64=SLIDEDOWN},  0, 0, FLAGS, .unit = "transition" },
+    {   "circlecrop", "circle crop transition", 0, AV_OPT_TYPE_CONST, {.i64=CIRCLECROP}, 0, 0, FLAGS, .unit = "transition" },
+    {   "rectcrop",   "rect crop transition",   0, AV_OPT_TYPE_CONST, {.i64=RECTCROP},   0, 0, FLAGS, .unit = "transition" },
+    {   "distance",   "distance transition",    0, AV_OPT_TYPE_CONST, {.i64=DISTANCE},   0, 0, FLAGS, .unit = "transition" },
+    {   "fadeblack",  "fadeblack transition",   0, AV_OPT_TYPE_CONST, {.i64=FADEBLACK},  0, 0, FLAGS, .unit = "transition" },
+    {   "fadewhite",  "fadewhite transition",   0, AV_OPT_TYPE_CONST, {.i64=FADEWHITE},  0, 0, FLAGS, .unit = "transition" },
+    {   "radial",     "radial transition",      0, AV_OPT_TYPE_CONST, {.i64=RADIAL},     0, 0, FLAGS, .unit = "transition" },
+    {   "smoothleft", "smoothleft transition",  0, AV_OPT_TYPE_CONST, {.i64=SMOOTHLEFT}, 0, 0, FLAGS, .unit = "transition" },
+    {   "smoothright","smoothright transition", 0, AV_OPT_TYPE_CONST, {.i64=SMOOTHRIGHT},0, 0, FLAGS, .unit = "transition" },
+    {   "smoothup",   "smoothup transition",    0, AV_OPT_TYPE_CONST, {.i64=SMOOTHUP},   0, 0, FLAGS, .unit = "transition" },
+    {   "smoothdown", "smoothdown transition",  0, AV_OPT_TYPE_CONST, {.i64=SMOOTHDOWN}, 0, 0, FLAGS, .unit = "transition" },
+    {   "circleopen", "circleopen transition",  0, AV_OPT_TYPE_CONST, {.i64=CIRCLEOPEN}, 0, 0, FLAGS, .unit = "transition" },
+    {   "circleclose","circleclose transition", 0, AV_OPT_TYPE_CONST, {.i64=CIRCLECLOSE},0, 0, FLAGS, .unit = "transition" },
+    {   "vertopen",   "vert open transition",   0, AV_OPT_TYPE_CONST, {.i64=VERTOPEN},   0, 0, FLAGS, .unit = "transition" },
+    {   "vertclose",  "vert close transition",  0, AV_OPT_TYPE_CONST, {.i64=VERTCLOSE},  0, 0, FLAGS, .unit = "transition" },
+    {   "horzopen",   "horz open transition",   0, AV_OPT_TYPE_CONST, {.i64=HORZOPEN},   0, 0, FLAGS, .unit = "transition" },
+    {   "horzclose",  "horz close transition",  0, AV_OPT_TYPE_CONST, {.i64=HORZCLOSE},  0, 0, FLAGS, .unit = "transition" },
+    {   "dissolve",   "dissolve transition",    0, AV_OPT_TYPE_CONST, {.i64=DISSOLVE},   0, 0, FLAGS, .unit = "transition" },
+    {   "pixelize",   "pixelize transition",    0, AV_OPT_TYPE_CONST, {.i64=PIXELIZE},   0, 0, FLAGS, .unit = "transition" },
+    {   "diagtl",     "diag tl transition",     0, AV_OPT_TYPE_CONST, {.i64=DIAGTL},     0, 0, FLAGS, .unit = "transition" },
+    {   "diagtr",     "diag tr transition",     0, AV_OPT_TYPE_CONST, {.i64=DIAGTR},     0, 0, FLAGS, .unit = "transition" },
+    {   "diagbl",     "diag bl transition",     0, AV_OPT_TYPE_CONST, {.i64=DIAGBL},     0, 0, FLAGS, .unit = "transition" },
+    {   "diagbr",     "diag br transition",     0, AV_OPT_TYPE_CONST, {.i64=DIAGBR},     0, 0, FLAGS, .unit = "transition" },
+    {   "hlslice",    "hl slice transition",    0, AV_OPT_TYPE_CONST, {.i64=HLSLICE},    0, 0, FLAGS, .unit = "transition" },
+    {   "hrslice",    "hr slice transition",    0, AV_OPT_TYPE_CONST, {.i64=HRSLICE},    0, 0, FLAGS, .unit = "transition" },
+    {   "vuslice",    "vu slice transition",    0, AV_OPT_TYPE_CONST, {.i64=VUSLICE},    0, 0, FLAGS, .unit = "transition" },
+    {   "vdslice",    "vd slice transition",    0, AV_OPT_TYPE_CONST, {.i64=VDSLICE},    0, 0, FLAGS, .unit = "transition" },
+    {   "hblur",      "hblur transition",       0, AV_OPT_TYPE_CONST, {.i64=HBLUR},      0, 0, FLAGS, .unit = "transition" },
+    {   "fadegrays",  "fadegrays transition",   0, AV_OPT_TYPE_CONST, {.i64=FADEGRAYS},  0, 0, FLAGS, .unit = "transition" },
+    {   "wipetl",     "wipe tl transition",     0, AV_OPT_TYPE_CONST, {.i64=WIPETL},     0, 0, FLAGS, .unit = "transition" },
+    {   "wipetr",     "wipe tr transition",     0, AV_OPT_TYPE_CONST, {.i64=WIPETR},     0, 0, FLAGS, .unit = "transition" },
+    {   "wipebl",     "wipe bl transition",     0, AV_OPT_TYPE_CONST, {.i64=WIPEBL},     0, 0, FLAGS, .unit = "transition" },
+    {   "wipebr",     "wipe br transition",     0, AV_OPT_TYPE_CONST, {.i64=WIPEBR},     0, 0, FLAGS, .unit = "transition" },
+    {   "squeezeh",   "squeeze h transition",   0, AV_OPT_TYPE_CONST, {.i64=SQUEEZEH},   0, 0, FLAGS, .unit = "transition" },
+    {   "squeezev",   "squeeze v transition",   0, AV_OPT_TYPE_CONST, {.i64=SQUEEZEV},   0, 0, FLAGS, .unit = "transition" },
+    {   "zoomin",     "zoom in transition",     0, AV_OPT_TYPE_CONST, {.i64=ZOOMIN},     0, 0, FLAGS, .unit = "transition" },
+    {   "fadefast",   "fast fade transition",   0, AV_OPT_TYPE_CONST, {.i64=FADEFAST},   0, 0, FLAGS, .unit = "transition" },
+    {   "fadeslow",   "slow fade transition",   0, AV_OPT_TYPE_CONST, {.i64=FADESLOW},   0, 0, FLAGS, .unit = "transition" },
+    {   "hlwind",     "hl wind transition",     0, AV_OPT_TYPE_CONST, {.i64=HLWIND},     0, 0, FLAGS, .unit = "transition" },
+    {   "hrwind",     "hr wind transition",     0, AV_OPT_TYPE_CONST, {.i64=HRWIND},     0, 0, FLAGS, .unit = "transition" },
+    {   "vuwind",     "vu wind transition",     0, AV_OPT_TYPE_CONST, {.i64=VUWIND},     0, 0, FLAGS, .unit = "transition" },
+    {   "vdwind",     "vd wind transition",     0, AV_OPT_TYPE_CONST, {.i64=VDWIND},     0, 0, FLAGS, .unit = "transition" },
+    {   "coverleft",  "cover left transition",  0, AV_OPT_TYPE_CONST, {.i64=COVERLEFT},  0, 0, FLAGS, .unit = "transition" },
+    {   "coverright", "cover right transition", 0, AV_OPT_TYPE_CONST, {.i64=COVERRIGHT}, 0, 0, FLAGS, .unit = "transition" },
+    {   "coverup",    "cover up transition",    0, AV_OPT_TYPE_CONST, {.i64=COVERUP},    0, 0, FLAGS, .unit = "transition" },
+    {   "coverdown",  "cover down transition",  0, AV_OPT_TYPE_CONST, {.i64=COVERDOWN},  0, 0, FLAGS, .unit = "transition" },
+    {   "revealleft", "reveal left transition", 0, AV_OPT_TYPE_CONST, {.i64=REVEALLEFT}, 0, 0, FLAGS, .unit = "transition" },
+    {   "revealright","reveal right transition",0, AV_OPT_TYPE_CONST, {.i64=REVEALRIGHT},0, 0, FLAGS, .unit = "transition" },
+    {   "revealup",   "reveal up transition",   0, AV_OPT_TYPE_CONST, {.i64=REVEALUP},   0, 0, FLAGS, .unit = "transition" },
+    {   "revealdown", "reveal down transition", 0, AV_OPT_TYPE_CONST, {.i64=REVEALDOWN}, 0, 0, FLAGS, .unit = "transition" },
     { "duration", "set cross fade duration", OFFSET(duration), AV_OPT_TYPE_DURATION, {.i64=1000000}, 0, 60000000, FLAGS },
     { "offset",   "set cross fade start relative to first input stream", OFFSET(offset), AV_OPT_TYPE_DURATION, {.i64=0}, INT64_MIN, INT64_MAX, FLAGS },
     { "expr",   "set expression for custom transition", OFFSET(custom_str), AV_OPT_TYPE_STRING, {.str=NULL}, 0, 0, FLAGS },
@@ -956,7 +955,7 @@ static void vertopen##name##_transition(AVFilterContext *ctx,                   
 {                                                                                    \
     XFadeContext *s = ctx->priv;                                                     \
     const int width = out->width;                                                    \
-    const float w2 = out->width / 2;                                                 \
+    const float w2 = out->width / 2.0;                                                 \
                                                                                      \
     for (int y = slice_start; y < slice_end; y++) {                                  \
         for (int x = 0; x < width; x++) {                                            \
@@ -984,7 +983,7 @@ static void vertclose##name##_transition(AVFilterContext *ctx,                  
     XFadeContext *s = ctx->priv;                                                     \
     const int nb_planes = s->nb_planes;                                              \
     const int width = out->width;                                                    \
-    const float w2 = out->width / 2;                                                 \
+    const float w2 = out->width / 2.0;                                                 \
                                                                                      \
     for (int y = slice_start; y < slice_end; y++) {                                  \
         for (int x = 0; x < width; x++) {                                            \
@@ -1012,7 +1011,7 @@ static void horzopen##name##_transition(AVFilterContext *ctx,                   
     XFadeContext *s = ctx->priv;                                                     \
     const int nb_planes = s->nb_planes;                                              \
     const int width = out->width;                                                    \
-    const float h2 = out->height / 2;                                                \
+    const float h2 = out->height / 2.0;                                                \
                                                                                      \
     for (int y = slice_start; y < slice_end; y++) {                                  \
         const float smooth = 2.f - fabsf((y - h2) / h2) - progress * 2.f;            \
@@ -1040,7 +1039,7 @@ static void horzclose##name##_transition(AVFilterContext *ctx,                  
     XFadeContext *s = ctx->priv;                                                     \
     const int nb_planes = s->nb_planes;                                              \
     const int width = out->width;                                                    \
-    const float h2 = out->height / 2;                                                \
+    const float h2 = out->height / 2.0;                                                \
                                                                                      \
     for (int y = slice_start; y < slice_end; y++) {                                  \
         const float smooth = 1.f + fabsf((y - h2) / h2) - progress * 2.f;            \
@@ -2041,6 +2040,9 @@ static int config_output(AVFilterLink *outlink)
     AVFilterContext *ctx = outlink->src;
     AVFilterLink *inlink0 = ctx->inputs[0];
     AVFilterLink *inlink1 = ctx->inputs[1];
+    FilterLink      *inl0 = ff_filter_link(inlink0);
+    FilterLink      *inl1 = ff_filter_link(inlink1);
+    FilterLink        *ol = ff_filter_link(outlink);
     XFadeContext *s = ctx->priv;
     const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(inlink0->format);
 
@@ -2063,19 +2065,19 @@ static int config_output(AVFilterLink *outlink)
         return AVERROR(EINVAL);
     }
 
-    if (!inlink0->frame_rate.num || !inlink0->frame_rate.den) {
+    if (!inl0->frame_rate.num || !inl0->frame_rate.den) {
         av_log(ctx, AV_LOG_ERROR, "The inputs needs to be a constant frame rate; "
-               "current rate of %d/%d is invalid\n", inlink0->frame_rate.num, inlink0->frame_rate.den);
+               "current rate of %d/%d is invalid\n", inl0->frame_rate.num, inl0->frame_rate.den);
         return AVERROR(EINVAL);
     }
 
-    if (inlink0->frame_rate.num != inlink1->frame_rate.num ||
-        inlink0->frame_rate.den != inlink1->frame_rate.den) {
+    if (inl0->frame_rate.num != inl1->frame_rate.num ||
+        inl0->frame_rate.den != inl1->frame_rate.den) {
         av_log(ctx, AV_LOG_ERROR, "First input link %s frame rate "
                "(%d/%d) do not match the corresponding "
                "second input link %s frame rate (%d/%d)\n",
-               ctx->input_pads[0].name, inlink0->frame_rate.num, inlink0->frame_rate.den,
-               ctx->input_pads[1].name, inlink1->frame_rate.num, inlink1->frame_rate.den);
+               ctx->input_pads[0].name, inl0->frame_rate.num, inl0->frame_rate.den,
+               ctx->input_pads[1].name, inl1->frame_rate.num, inl1->frame_rate.den);
         return AVERROR(EINVAL);
     }
 
@@ -2083,7 +2085,7 @@ static int config_output(AVFilterLink *outlink)
     outlink->h = inlink0->h;
     outlink->time_base = inlink0->time_base;
     outlink->sample_aspect_ratio = inlink0->sample_aspect_ratio;
-    outlink->frame_rate = inlink0->frame_rate;
+    ol->frame_rate = inl0->frame_rate;
 
     s->depth = pix_desc->comp[0].depth;
     s->is_rgb = !!(pix_desc->flags & AV_PIX_FMT_FLAG_RGB);
@@ -2288,8 +2290,11 @@ static int xfade_activate(AVFilterContext *avctx)
         // Check if we are not yet transitioning, in which case
         // just request and forward the input frame.
         if (s->start_pts > s->pts) {
+            int ret;
             s->passthrough = 1;
-            ff_inlink_consume_frame(in_a, &s->xf[0]);
+            ret = ff_inlink_consume_frame(in_a, &s->xf[0]);
+            if (ret < 0)
+                return ret;
             return ff_filter_frame(outlink, s->xf[0]);
         }
         s->passthrough = 0;
@@ -2297,8 +2302,14 @@ static int xfade_activate(AVFilterContext *avctx)
         // We are transitioning, so we need a frame from second input
         if (ff_inlink_check_available_frame(in_b)) {
             int ret;
-            ff_inlink_consume_frame(avctx->inputs[0], &s->xf[0]);
-            ff_inlink_consume_frame(avctx->inputs[1], &s->xf[1]);
+            ret = ff_inlink_consume_frame(avctx->inputs[0], &s->xf[0]);
+            if (ret < 0)
+                return ret;
+            ret = ff_inlink_consume_frame(avctx->inputs[1], &s->xf[1]);
+            if (ret < 0) {
+                av_frame_free(&s->xf[0]);
+                return ret;
+            }
 
             // Calculate PTS offset to first input
             if (s->inputs_offset_pts == AV_NOPTS_VALUE)

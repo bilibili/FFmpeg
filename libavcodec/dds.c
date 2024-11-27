@@ -636,7 +636,9 @@ static int dds_decode(AVCodecContext *avctx, AVFrame *frame,
         ctx->dec.tex_data.in = gbc->buffer;
         ctx->dec.frame_data.out = frame->data[0];
         ctx->dec.stride = frame->linesize[0];
-        avctx->execute2(avctx, ff_texturedsp_decompress_thread, &ctx->dec, NULL, ctx->dec.slice_count);
+        ctx->dec.width  = avctx->coded_width;
+        ctx->dec.height = avctx->coded_height;
+        ff_texturedsp_exec_decompress_threads(avctx, &ctx->dec);
     } else if (!ctx->paletted && ctx->bpp == 4 && avctx->pix_fmt == AV_PIX_FMT_PAL8) {
         uint8_t *dst = frame->data[0];
         int x, y, i;
@@ -709,8 +711,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
         run_postproc(avctx, frame);
 
     /* Frame is ready to be output. */
-    frame->pict_type = AV_PICTURE_TYPE_I;
-    frame->flags |= AV_FRAME_FLAG_KEY;
     *got_frame = 1;
 
     return avpkt->size;

@@ -23,7 +23,6 @@
 #include "libavutil/opt.h"
 #include "vulkan_filter.h"
 #include "vulkan_spirv.h"
-#include "internal.h"
 #include "filters.h"
 #include "colorspace.h"
 #include "video.h"
@@ -231,7 +230,7 @@ static int testsrc_vulkan_activate(AVFilterContext *ctx)
                 return AVERROR(ENOMEM);
 
             err = ff_vk_filter_process_simple(&s->vkctx, &s->e, &s->pl, s->picref, NULL,
-                                              NULL, &s->opts, sizeof(s->opts));
+                                              VK_NULL_HANDLE, &s->opts, sizeof(s->opts));
             if (err < 0)
                 return err;
         }
@@ -250,7 +249,7 @@ static int testsrc_vulkan_activate(AVFilterContext *ctx)
     frame->sample_aspect_ratio = s->sar;
     if (!s->draw_once) {
         err = ff_vk_filter_process_simple(&s->vkctx, &s->e, &s->pl, frame, NULL,
-                                          NULL, &s->opts, sizeof(s->opts));
+                                          VK_NULL_HANDLE, &s->opts, sizeof(s->opts));
         if (err < 0) {
             av_frame_free(&frame);
             return err;
@@ -266,6 +265,7 @@ static int testsrc_vulkan_activate(AVFilterContext *ctx)
 static int testsrc_vulkan_config_props(AVFilterLink *outlink)
 {
     int err;
+    FilterLink *l = ff_filter_link(outlink);
     TestSrcVulkanContext *s = outlink->src->priv;
     FFVulkanContext *vkctx = &s->vkctx;
 
@@ -284,8 +284,8 @@ static int testsrc_vulkan_config_props(AVFilterLink *outlink)
     if (err < 0)
         return err;
 
-    outlink->hw_frames_ctx = av_buffer_ref(vkctx->frames_ref);
-    if (!outlink->hw_frames_ctx)
+    l->hw_frames_ctx = av_buffer_ref(vkctx->frames_ref);
+    if (!l->hw_frames_ctx)
         return AVERROR(ENOMEM);
 
     s->time_base = av_inv_q(s->frame_rate);
@@ -297,7 +297,7 @@ static int testsrc_vulkan_config_props(AVFilterLink *outlink)
     outlink->w = s->w;
     outlink->h = s->h;
     outlink->sample_aspect_ratio = s->sar;
-    outlink->frame_rate = s->frame_rate;
+    l->frame_rate = s->frame_rate;
     outlink->time_base  = s->time_base;
 
     return 0;
@@ -340,13 +340,13 @@ static const AVOption color_vulkan_options[] = {
     { "color", "set color", OFFSET(color_rgba), AV_OPT_TYPE_COLOR, {.str = "black"}, 0, 0, FLAGS },
     { "c",     "set color", OFFSET(color_rgba), AV_OPT_TYPE_COLOR, {.str = "black"}, 0, 0, FLAGS },
     COMMON_OPTS
-    { "out_range", "Output colour range (from 0 to 2) (default 0)", OFFSET(out_range), AV_OPT_TYPE_INT, {.i64 = AVCOL_RANGE_UNSPECIFIED}, AVCOL_RANGE_UNSPECIFIED, AVCOL_RANGE_JPEG, .flags = FLAGS, "range" },
-        { "full", "Full range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_JPEG }, 0, 0, FLAGS, "range" },
-        { "limited", "Limited range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_MPEG }, 0, 0, FLAGS, "range" },
-        { "jpeg", "Full range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_JPEG }, 0, 0, FLAGS, "range" },
-        { "mpeg", "Limited range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_MPEG }, 0, 0, FLAGS, "range" },
-        { "tv", "Limited range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_MPEG }, 0, 0, FLAGS, "range" },
-        { "pc", "Full range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_JPEG }, 0, 0, FLAGS, "range" },
+    { "out_range", "Output colour range (from 0 to 2) (default 0)", OFFSET(out_range), AV_OPT_TYPE_INT, {.i64 = AVCOL_RANGE_UNSPECIFIED}, AVCOL_RANGE_UNSPECIFIED, AVCOL_RANGE_JPEG, .flags = FLAGS, .unit = "range" },
+        { "full", "Full range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_JPEG }, 0, 0, FLAGS, .unit = "range" },
+        { "limited", "Limited range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_MPEG }, 0, 0, FLAGS, .unit = "range" },
+        { "jpeg", "Full range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_JPEG }, 0, 0, FLAGS, .unit = "range" },
+        { "mpeg", "Limited range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_MPEG }, 0, 0, FLAGS, .unit = "range" },
+        { "tv", "Limited range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_MPEG }, 0, 0, FLAGS, .unit = "range" },
+        { "pc", "Full range", 0, AV_OPT_TYPE_CONST, { .i64 = AVCOL_RANGE_JPEG }, 0, 0, FLAGS, .unit = "range" },
     { NULL },
 };
 

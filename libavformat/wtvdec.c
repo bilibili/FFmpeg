@@ -31,6 +31,7 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/intfloat.h"
+#include "libavutil/mem.h"
 #include "libavutil/time_internal.h"
 #include "avformat.h"
 #include "demux.h"
@@ -184,7 +185,7 @@ static AVIOContext * wtvfile_open_sector(unsigned first_sector, uint64_t length,
         int nb_sectors1 = read_ints(s->pb, sectors1, WTV_SECTOR_SIZE / 4);
         int i;
 
-        wf->sectors = av_malloc_array(nb_sectors1, 1 << WTV_SECTOR_BITS);
+        wf->sectors = av_calloc(nb_sectors1, 1 << WTV_SECTOR_BITS);
         if (!wf->sectors) {
             av_free(wf);
             return NULL;
@@ -845,7 +846,8 @@ static int parse_chunks(AVFormatContext *s, int mode, int64_t seekts, int *len_p
                 }
 
                 buf_size = FFMIN(len - consumed, sizeof(buf));
-                avio_read(pb, buf, buf_size);
+                if (avio_read(pb, buf, buf_size) != buf_size)
+                    return AVERROR_INVALIDDATA;
                 consumed += buf_size;
                 ff_parse_mpeg2_descriptor(s, st, 0, &pbuf, buf + buf_size, NULL, 0, 0, NULL);
             }
@@ -1117,14 +1119,14 @@ static int read_close(AVFormatContext *s)
     return 0;
 }
 
-const AVInputFormat ff_wtv_demuxer = {
-    .name           = "wtv",
-    .long_name      = NULL_IF_CONFIG_SMALL("Windows Television (WTV)"),
+const FFInputFormat ff_wtv_demuxer = {
+    .p.name         = "wtv",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Windows Television (WTV)"),
+    .p.flags        = AVFMT_SHOW_IDS,
     .priv_data_size = sizeof(WtvContext),
     .read_probe     = read_probe,
     .read_header    = read_header,
     .read_packet    = read_packet,
     .read_seek      = read_seek,
     .read_close     = read_close,
-    .flags          = AVFMT_SHOW_IDS,
 };

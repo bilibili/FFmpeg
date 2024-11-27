@@ -21,7 +21,8 @@
 #include "asm.S"
 
 // (a0) = (a1) * (a2) [0..a3-1]
-func ff_vector_fmul_rvv, zve32f
+func ff_vector_fmul_rvv, zve32f, zba
+        lpad    0
 1:
         vsetvli  t0, a3, e32, m8, ta, ma
         vle32.v  v16, (a1)
@@ -38,7 +39,8 @@ func ff_vector_fmul_rvv, zve32f
 endfunc
 
 // (a0) += (a1) * fa0 [0..a2-1]
-func ff_vector_fmac_scalar_rvv, zve32f
+func ff_vector_fmac_scalar_rvv, zve32f, zba
+        lpad    0
 NOHWF   fmv.w.x   fa0, a2
 NOHWF   mv        a2, a3
 1:
@@ -57,7 +59,8 @@ NOHWF   mv        a2, a3
 endfunc
 
 // (a0) = (a1) * fa0 [0..a2-1]
-func ff_vector_fmul_scalar_rvv, zve32f
+func ff_vector_fmul_scalar_rvv, zve32f, zba
+        lpad    0
 NOHWF   fmv.w.x  fa0, a2
 NOHWF   mv       a2, a3
 1:
@@ -73,20 +76,22 @@ NOHWF   mv       a2, a3
         ret
 endfunc
 
-func ff_vector_fmul_window_rvv, zve32f
+func ff_vector_fmul_window_rvv, zve32f, zba
+        lpad    0
         // a0: dst, a1: src0, a2: src1, a3: window, a4: length
-        vsetvli    t0, zero, e16, m2, ta, ma
+        // e16/m2 and e32/m4 are possible but slower due to gather.
+        vsetvli    t0, zero, e16, m1, ta, ma
         sh2add     a2, a4, a2
         vid.v      v0
         sh3add     t3, a4, a3
         vadd.vi    v0, v0, 1
         sh3add     t0, a4, a0
 1:
-        vsetvli    t2, a4, e16, m2, ta, ma
+        vsetvli    t2, a4, e16, m1, ta, ma
         slli       t4, t2, 2
         vrsub.vx   v2, v0, t2
         sub        t3, t3, t4
-        vsetvli    zero, zero, e32, m4, ta, ma
+        vsetvli    zero, zero, e32, m2, ta, ma
         sub        a2, a2, t4
         vle32.v    v8, (t3)
         sub        t0, t0, t4
@@ -112,7 +117,8 @@ func ff_vector_fmul_window_rvv, zve32f
 endfunc
 
 // (a0) = (a1) * (a2) + (a3) [0..a4-1]
-func ff_vector_fmul_add_rvv, zve32f
+func ff_vector_fmul_add_rvv, zve32f, zba
+        lpad    0
 1:
         vsetvli   t0, a4, e32, m8, ta, ma
         vle32.v   v8, (a1)
@@ -132,17 +138,19 @@ endfunc
 
 // TODO factor vrsub, separate last iteration?
 // (a0) = (a1) * reverse(a2) [0..a3-1]
-func ff_vector_fmul_reverse_rvv, zve32f
-        vsetvli  t0, zero, e16, m4, ta, ma
+func ff_vector_fmul_reverse_rvv, zve32f, zba
+        lpad    0
+        // e16/m4 and e32/m8 are possible but slower due to gather.
+        vsetvli  t0, zero, e16, m1, ta, ma
         sh2add   a2, a3, a2
         vid.v    v0
         vadd.vi  v0, v0, 1
 1:
-        vsetvli  t0, a3, e16, m4, ta, ma
+        vsetvli  t0, a3, e16, m1, ta, ma
         slli     t1, t0, 2
         vrsub.vx v4, v0, t0 // v4[i] = [VL-1, VL-2... 1, 0]
         sub      a2, a2, t1
-        vsetvli  zero, zero, e32, m8, ta, ma
+        vsetvli  zero, zero, e32, m2, ta, ma
         vle32.v  v8, (a2)
         sub      a3, a3, t0
         vle32.v  v16, (a1)
@@ -157,7 +165,8 @@ func ff_vector_fmul_reverse_rvv, zve32f
 endfunc
 
 // (a0) = (a0) + (a1), (a1) = (a0) - (a1) [0..a2-1]
-func ff_butterflies_float_rvv, zve32f
+func ff_butterflies_float_rvv, zve32f, zba
+        lpad    0
 1:
         vsetvli  t0, a2, e32, m8, ta, ma
         vle32.v  v16, (a0)
@@ -175,7 +184,8 @@ func ff_butterflies_float_rvv, zve32f
 endfunc
 
 // a0 = (a0).(a1) [0..a2-1]
-func ff_scalarproduct_float_rvv, zve32f
+func ff_scalarproduct_float_rvv, zve32f, zba
+        lpad    0
         vsetvli      t0, zero, e32, m8, ta, ma
         vmv.v.x      v8, zero
         vmv.s.x      v0, zero
@@ -197,7 +207,8 @@ NOHWF   fmv.x.w  a0, fa0
 endfunc
 
 // (a0) = (a1) * (a2) [0..a3-1]
-func ff_vector_dmul_rvv, zve64d
+func ff_vector_dmul_rvv, zve64d, zba
+        lpad    0
 1:
         vsetvli  t0, a3, e64, m8, ta, ma
         vle64.v  v16, (a1)
@@ -214,7 +225,8 @@ func ff_vector_dmul_rvv, zve64d
 endfunc
 
 // (a0) += (a1) * fa0 [0..a2-1]
-func ff_vector_dmac_scalar_rvv, zve64d
+func ff_vector_dmac_scalar_rvv, zve64d, zba
+        lpad    0
 NOHWD   fmv.d.x   fa0, a2
 NOHWD   mv        a2, a3
 1:
@@ -232,7 +244,8 @@ NOHWD   mv        a2, a3
 endfunc
 
 // (a0) = (a1) * fa0 [0..a2-1]
-func ff_vector_dmul_scalar_rvv, zve64d
+func ff_vector_dmul_scalar_rvv, zve64d, zba
+        lpad    0
 NOHWD   fmv.d.x  fa0, a2
 NOHWD   mv       a2, a3
 1:
@@ -245,5 +258,27 @@ NOHWD   mv       a2, a3
         sh3add   a0, t0, a0
         bnez     a2, 1b
 
+        ret
+endfunc
+
+func ff_scalarproduct_double_rvv, zve64f, zba
+        lpad    0
+        vsetvli      t0, zero, e64, m8, ta, ma
+        vmv.v.x      v8, zero
+        vmv.s.x      v0, zero
+1:
+        vsetvli      t0, a2, e64, m8, tu, ma
+        vle64.v      v16, (a0)
+        sub          a2, a2, t0
+        vle64.v      v24, (a1)
+        sh3add       a0, t0, a0
+        vfmacc.vv    v8, v16, v24
+        sh3add       a1, t0, a1
+        bnez         a2, 1b
+
+        vsetvli      t0, zero, e64, m8, ta, ma
+        vfredusum.vs v0, v8, v0
+        vfmv.f.s     fa0, v0
+NOHWD   fmv.x.w      a0, fa0
         ret
 endfunc

@@ -32,8 +32,6 @@
 #define URL_PROTOCOL_FLAG_NESTED_SCHEME 1 /*< The protocol name can be the first part of a nested protocol scheme */
 #define URL_PROTOCOL_FLAG_NETWORK       2 /*< The protocol uses network */
 
-extern const AVClass ffurl_context_class;
-
 typedef struct URLContext {
     const AVClass *av_class;    /**< information for av_log(). Set by url_open(). */
     const struct URLProtocol *prot;
@@ -78,8 +76,8 @@ typedef struct URLProtocol {
     int     (*url_write)(URLContext *h, const unsigned char *buf, int size);
     int64_t (*url_seek)( URLContext *h, int64_t pos, int whence);
     int     (*url_close)(URLContext *h);
-    int (*url_read_pause)(URLContext *h, int pause);
-    int64_t (*url_read_seek)(URLContext *h, int stream_index,
+    int (*url_read_pause)(void *urlcontext, int pause);
+    int64_t (*url_read_seek)(void *urlcontext, int stream_index,
                              int64_t timestamp, int flags);
     int (*url_get_file_handle)(URLContext *h);
     int (*url_get_multi_file_handle)(URLContext *h, int **handles,
@@ -194,11 +192,7 @@ static inline int ffurl_read(URLContext *h, uint8_t *buf, int size)
  */
 int ffurl_read_complete(URLContext *h, unsigned char *buf, int size);
 
-#if FF_API_AVIO_WRITE_NONCONST
-int ffurl_write2(void *urlcontext, uint8_t *buf, int size);
-#else
 int ffurl_write2(void *urlcontext, const uint8_t *buf, int size);
-#endif
 /**
  * Write size bytes from buf to the resource accessed by h.
  *
@@ -207,11 +201,7 @@ int ffurl_write2(void *urlcontext, const uint8_t *buf, int size);
  */
 static inline int ffurl_write(URLContext *h, const uint8_t *buf, int size)
 {
-#if FF_API_AVIO_WRITE_NONCONST
-    return ffurl_write2(h, (uint8_t*)buf, size);
-#else
     return ffurl_write2(h, buf, size);
-#endif
 }
 
 int64_t ffurl_seek2(void *urlcontext, int64_t pos, int whence);

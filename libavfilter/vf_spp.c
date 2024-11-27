@@ -33,10 +33,12 @@
 
 #include "libavutil/emms.h"
 #include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 #include "libavutil/mem_internal.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
-#include "internal.h"
+
+#include "filters.h"
 #include "qp_table.h"
 #include "vf_spp.h"
 #include "video.h"
@@ -66,9 +68,9 @@ static void *child_next(void *obj, void *prev)
 static const AVOption spp_options[] = {
     { "quality", "set quality", OFFSET(log2_count), AV_OPT_TYPE_INT, {.i64 = 3}, 0, MAX_LEVEL, TFLAGS },
     { "qp", "force a constant quantizer parameter", OFFSET(qp), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 63, FLAGS },
-    { "mode", "set thresholding mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_HARD}, 0, NB_MODES - 1, FLAGS, "mode" },
-        { "hard", "hard thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_HARD}, INT_MIN, INT_MAX, FLAGS, "mode" },
-        { "soft", "soft thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_SOFT}, INT_MIN, INT_MAX, FLAGS, "mode" },
+    { "mode", "set thresholding mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_HARD}, 0, NB_MODES - 1, FLAGS, .unit = "mode" },
+        { "hard", "hard thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_HARD}, INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
+        { "soft", "soft thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_SOFT}, INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
     { "use_bframe_qp", "use B-frames' QP", OFFSET(use_bframe_qp), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS },
     { NULL }
 };
@@ -171,7 +173,7 @@ static void store_slice_c(uint8_t *dst, const int16_t *src,
     int y, x;
 
 #define STORE(pos) do {                                                     \
-    temp = ((src[x + y*src_linesize + pos] << log2_scale) + d[pos]) >> 6;   \
+    temp = (src[x + y*src_linesize + pos] * (1 << log2_scale) + d[pos]) >> 6;\
     if (temp & 0x100)                                                       \
         temp = ~(temp >> 31);                                               \
     dst[x + y*dst_linesize + pos] = temp;                                   \
@@ -202,7 +204,7 @@ static void store_slice16_c(uint16_t *dst, const int16_t *src,
     unsigned int mask = -1<<depth;
 
 #define STORE16(pos) do {                                                   \
-    temp = ((src[x + y*src_linesize + pos] << log2_scale) + (d[pos]>>1)) >> 5;   \
+    temp = (src[x + y*src_linesize + pos] * (1 << log2_scale) + (d[pos]>>1)) >> 5; \
     if (temp & mask )                                                       \
         temp = ~(temp >> 31);                                               \
     dst[x + y*dst_linesize + pos] = temp;                                   \

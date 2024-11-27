@@ -24,20 +24,14 @@
 
 typedef struct IVFEncContext {
     unsigned frame_cnt;
-    uint64_t last_pts, sum_delta_pts, last_pkt_duration;
+    uint64_t last_pts, last_pkt_duration;
 } IVFEncContext;
 
 static int ivf_init(AVFormatContext *s)
 {
-    AVCodecParameters *par;
+    AVCodecParameters *par = s->streams[0]->codecpar;
 
-    if (s->nb_streams != 1) {
-        av_log(s, AV_LOG_ERROR, "Format supports only exactly one video stream\n");
-        return AVERROR(EINVAL);
-    }
-    par = s->streams[0]->codecpar;
-    if (par->codec_type != AVMEDIA_TYPE_VIDEO ||
-        !(par->codec_id == AV_CODEC_ID_AV1 ||
+    if (!(par->codec_id == AV_CODEC_ID_AV1 ||
           par->codec_id == AV_CODEC_ID_VP8 ||
           par->codec_id == AV_CODEC_ID_VP9)) {
         av_log(s, AV_LOG_ERROR, "Currently only VP8, VP9 and AV1 are supported!\n");
@@ -86,8 +80,6 @@ static int ivf_write_packet(AVFormatContext *s, AVPacket *pkt)
     avio_wl32(pb, pkt->size);
     avio_wl64(pb, pkt->pts);
     avio_write(pb, pkt->data, pkt->size);
-    if (ctx->frame_cnt)
-        ctx->sum_delta_pts += pkt->pts - ctx->last_pts;
     ctx->last_pkt_duration = pkt->duration;
     ctx->frame_cnt++;
     ctx->last_pts = pkt->pts;
@@ -125,7 +117,9 @@ const FFOutputFormat ff_ivf_muxer = {
     .p.extensions   = "ivf",
     .p.audio_codec  = AV_CODEC_ID_NONE,
     .p.video_codec  = AV_CODEC_ID_VP8,
+    .p.subtitle_codec = AV_CODEC_ID_NONE,
     .p.codec_tag    = (const AVCodecTag* const []){ codec_ivf_tags, 0 },
+    .flags_internal   = FF_OFMT_FLAG_MAX_ONE_OF_EACH,
     .priv_data_size = sizeof(IVFEncContext),
     .init         = ivf_init,
     .write_header = ivf_write_header,

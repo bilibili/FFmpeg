@@ -62,6 +62,14 @@ FATE_AAC += fate-aac-ap05_48
 fate-aac-ap05_48: CMD = pcm -i $(TARGET_SAMPLES)/aac/ap05_48.mp4
 fate-aac-ap05_48: REF = $(SAMPLES)/aac/ap05_48.s16
 
+FATE_AAC += fate-aac-fd_2_c1_ms_0x01
+fate-aac-fd_2_c1_ms_0x01: CMD = pcm -i $(TARGET_SAMPLES)/aac/Fd_2_c1_Ms_0x01.mp4
+fate-aac-fd_2_c1_ms_0x01: REF = $(SAMPLES)/aac/Fd_2_c1_Ms_0x01.s16
+
+FATE_AAC += fate-aac-fd_2_c1_ms_0x04
+fate-aac-fd_2_c1_ms_0x04: CMD = pcm -i $(TARGET_SAMPLES)/aac/Fd_2_c1_Ms_0x04.mp4
+fate-aac-fd_2_c1_ms_0x04: REF = $(SAMPLES)/aac/Fd_2_c1_Ms_0x04.s16
+
 FATE_AAC += fate-aac-er_ad6000np_44_ep0
 fate-aac-er_ad6000np_44_ep0: CMD = pcm -i $(TARGET_SAMPLES)/aac/er_ad6000np_44_ep0.mp4
 fate-aac-er_ad6000np_44_ep0: REF = $(SAMPLES)/aac/er_ad6000np_44.s16
@@ -243,17 +251,17 @@ fate-aac-latm_stereo_to_51: REF = $(SAMPLES)/aac/latm_stereo_to_51_ref.s16
 fate-aac-autobsf-adtstoasc: CMD = transcode "aac" $(TARGET_SAMPLES)/audiomatch/tones_afconvert_16000_mono_aac_lc.adts \
                                             matroska "-c:a copy" "-c:a copy"
 
-FATE_AAC-$(call      DEMDEC, AAC,    AAC)      += $(FATE_AAC_CT_RAW)
-FATE_AAC-$(call      DEMDEC, MOV,    AAC)      += $(FATE_AAC)
-FATE_AAC_LATM-$(call DEMDEC, MPEGTS, AAC_LATM) += $(FATE_AAC_LATM)
-FATE_AAC-$(call      DEMDEC, AAC,    AAC_FIXED)+= $(FATE_AAC_FIXED)
+FATE_AAC-$(call      DEMDEC, AAC,    AAC,       ARESAMPLE_FILTER) += $(FATE_AAC_CT_RAW)
+FATE_AAC-$(call      DEMDEC, MOV,    AAC,       ARESAMPLE_FILTER) += $(FATE_AAC)
+FATE_AAC_LATM-$(call DEMDEC, MPEGTS, AAC_LATM,  ARESAMPLE_FILTER) += $(FATE_AAC_LATM)
+FATE_AAC-$(call      DEMDEC, AAC,    AAC_FIXED, ARESAMPLE_FILTER) += $(FATE_AAC_FIXED)
 
 FATE_AAC_ALL = $(FATE_AAC-yes) $(FATE_AAC_LATM-yes) $(FATE_AAC_FIXED-yes)
 
 $(FATE_AAC_ALL): CMP  = oneoff
 $(FATE_AAC_ALL): FUZZ = 2
 
-FATE_AAC_ENCODE-$(call ENCMUX, AAC, ADTS) += $(FATE_AAC_ENCODE)
+FATE_AAC_ENCODE-$(call ENCMUX, AAC, ADTS, ARESAMPLE_FILTER) += $(FATE_AAC_ENCODE)
 
 FATE_AAC_BSF-$(call ALLYES, AAC_DEMUXER AAC_ADTSTOASC_BSF MATROSKA_MUXER) += fate-aac-autobsf-adtstoasc
 

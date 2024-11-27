@@ -20,12 +20,13 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <assert.h>
 #include <string.h>
 #include <initguid.h>
 
+#include "libavutil/avassert.h"
 #include "libavutil/common.h"
 #include "libavutil/log.h"
+#include "libavutil/mem.h"
 #include "libavutil/time.h"
 
 #include "avcodec.h"
@@ -117,7 +118,7 @@ static int dxva_get_decoder_configuration(AVCodecContext *avctx,
 
     for (i = 0; i < cfg_count; i++) {
         unsigned score;
-        UINT ConfigBitstreamRaw;
+        UINT ConfigBitstreamRaw = 0;
         GUID guidConfigBitstreamEncryption;
 
 #if CONFIG_D3D11VA
@@ -268,7 +269,7 @@ static int dxva_get_decoder_guid(AVCodecContext *avctx, void *service, void *sur
     *decoder_guid = ff_GUID_NULL;
     for (i = 0; dxva_modes[i].guid; i++) {
         const dxva_mode *mode = &dxva_modes[i];
-        int validate;
+        int validate = 0;
         if (!dxva_check_codec_compatibility(avctx, mode))
             continue;
 
@@ -768,12 +769,17 @@ static void *get_surface(const AVCodecContext *avctx, const AVFrame *frame)
 }
 
 unsigned ff_dxva2_get_surface_index(const AVCodecContext *avctx,
-                                    const AVDXVAContext *ctx,
-                                    const AVFrame *frame)
+                                    AVDXVAContext *ctx, const AVFrame *frame,
+                                    int curr)
 {
     void *surface = get_surface(avctx, frame);
     unsigned i;
 
+#if CONFIG_D3D12VA
+    if (avctx->pix_fmt == AV_PIX_FMT_D3D12) {
+        return ff_d3d12va_get_surface_index(avctx, (D3D12VADecodeContext *)ctx, frame, curr);
+    }
+#endif
 #if CONFIG_D3D11VA
     if (avctx->pix_fmt == AV_PIX_FMT_D3D11)
         return (intptr_t)frame->data[1];
@@ -790,7 +796,7 @@ unsigned ff_dxva2_get_surface_index(const AVCodecContext *avctx,
     }
 #endif
 
-    assert(0);
+    av_log((AVCodecContext *)avctx, AV_LOG_WARNING, "Could not get surface index. Using 0 instead.\n");
     return 0;
 }
 
@@ -800,7 +806,7 @@ int ff_dxva2_commit_buffer(AVCodecContext *avctx,
                            unsigned type, const void *data, unsigned size,
                            unsigned mb_count)
 {
-    void     *dxva_data;
+    void     *dxva_data = NULL;
     unsigned dxva_size;
     int      result;
     HRESULT hr = 0;
@@ -822,7 +828,7 @@ int ff_dxva2_commit_buffer(AVCodecContext *avctx,
                type, (unsigned)hr);
         return -1;
     }
-    if (size <= dxva_size) {
+    if (dxva_data && size <= dxva_size) {
         memcpy(dxva_data, data, size);
 
 #if CONFIG_D3D11VA
@@ -900,7 +906,7 @@ int ff_dxva2_common_end_frame(AVCodecContext *avctx, AVFrame *frame,
 #endif
     DECODER_BUFFER_DESC             *buffer = NULL, *buffer_slice = NULL;
     int result, runs = 0;
-    HRESULT hr;
+    HRESULT hr = -1;
     unsigned type;
     FFDXVASharedContext *sctx = DXVA_SHARED_CONTEXT(avctx);
 
@@ -1007,7 +1013,7 @@ int ff_dxva2_common_end_frame(AVCodecContext *avctx, AVFrame *frame,
 
     /* TODO Film Grain when possible */
 
-    assert(buffer_count == 1 + (qm_size > 0) + 2);
+    av_assert0(buffer_count == 1 + (qm_size > 0) + 2);
 
 #if CONFIG_D3D11VA
     if (ff_dxva2_is_d3d11(avctx))
@@ -1055,4 +1061,24 @@ int ff_dxva2_is_d3d11(const AVCodecContext *avctx)
                avctx->pix_fmt == AV_PIX_FMT_D3D11;
     else
         return 0;
+}
+
+unsigned *ff_dxva2_get_report_id(const AVCodecContext *avctx, AVDXVAContext *ctx)
+{
+    unsigned *report_id = NULL;
+
+#if CONFIG_D3D12VA
+    if (avctx->pix_fmt == AV_PIX_FMT_D3D12)
+        report_id = &ctx->d3d12va.report_id;
+#endif
+#if CONFIG_D3D11VA
+    if (ff_dxva2_is_d3d11(avctx))
+        report_id = &ctx->d3d11va.report_id;
+#endif
+#if CONFIG_DXVA2
+    if (avctx->pix_fmt == AV_PIX_FMT_DXVA2_VLD)
+        report_id = &ctx->dxva2.report_id;
+#endif
+
+    return report_id;
 }

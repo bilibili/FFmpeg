@@ -350,6 +350,74 @@ fail:
     return AVERROR_INVALIDDATA;
 }
 
+av_cold void ff_vlc_init_table_from_lengths(VLCElem table[], int table_size,
+                                            int nb_bits, int nb_codes,
+                                            const int8_t *lens, int lens_wrap,
+                                            const void *symbols, int symbols_wrap, int symbols_size,
+                                            int offset, int flags)
+{
+    VLC vlc = { .table = table, .table_allocated = table_size };
+
+    ff_vlc_init_from_lengths(&vlc, nb_bits, nb_codes, lens, lens_wrap,
+                             symbols, symbols_wrap, symbols_size,
+                             offset, flags | VLC_INIT_USE_STATIC, NULL);
+}
+
+av_cold const VLCElem *ff_vlc_init_tables_from_lengths(VLCInitState *state,
+                                                       int nb_bits, int nb_codes,
+                                                       const int8_t *lens, int lens_wrap,
+                                                       const void *symbols, int symbols_wrap, int symbols_size,
+                                                       int offset, int flags)
+{
+    VLC vlc = { .table = state->table, .table_allocated = state->size };
+
+    ff_vlc_init_from_lengths(&vlc, nb_bits, nb_codes, lens, lens_wrap,
+                             symbols, symbols_wrap, symbols_size,
+                             offset, flags | VLC_INIT_STATIC_OVERLONG, NULL);
+
+    state->table += vlc.table_size;
+    state->size  -= vlc.table_size;
+
+    return vlc.table;
+}
+
+av_cold void ff_vlc_init_table_sparse(VLCElem table[], int table_size,
+                                      int nb_bits, int nb_codes,
+                                      const void *bits, int bits_wrap, int bits_size,
+                                      const void *codes, int codes_wrap, int codes_size,
+                                      const void *symbols, int symbols_wrap, int symbols_size,
+                                      int flags)
+{
+    VLC vlc = { .table = table, .table_allocated = table_size };
+
+    ff_vlc_init_sparse(&vlc, nb_bits, nb_codes,
+                       bits, bits_wrap, bits_size,
+                       codes, codes_wrap, codes_size,
+                       symbols, symbols_wrap, symbols_size,
+                       flags | VLC_INIT_USE_STATIC);
+}
+
+av_cold const VLCElem *ff_vlc_init_tables_sparse(VLCInitState *state,
+                                                 int nb_bits, int nb_codes,
+                                                 const void *bits, int bits_wrap, int bits_size,
+                                                 const void *codes, int codes_wrap, int codes_size,
+                                                 const void *symbols, int symbols_wrap, int symbols_size,
+                                                 int flags)
+{
+    VLC vlc = { .table = state->table, .table_allocated = state->size };
+
+    ff_vlc_init_sparse(&vlc, nb_bits, nb_codes,
+                       bits, bits_wrap, bits_size,
+                       codes, codes_wrap, codes_size,
+                       symbols, symbols_wrap, symbols_size,
+                       flags | VLC_INIT_STATIC_OVERLONG);
+
+    state->table += vlc.table_size;
+    state->size  -= vlc.table_size;
+
+    return vlc.table;
+}
+
 static void add_level(VLC_MULTI_ELEM *table, const int is16bit,
                       const int num, const int numbits,
                       const VLCcode *buf,
@@ -372,8 +440,8 @@ static void add_level(VLC_MULTI_ELEM *table, const int is16bit,
             code = curcode + (buf[t].code >> curlen);
             newlimit = curlimit - l;
             l  += curlen;
-            if (is16bit) AV_WN16(info.val+2*curlevel, sym);
-            else info.val[curlevel] = sym&0xFF;
+            if (is16bit) info.val16[curlevel] = sym;
+            else info.val8[curlevel] = sym&0xFF;
 
             if (curlevel) { // let's not add single entries
                 uint32_t val = code >> (32 - numbits);
@@ -400,7 +468,7 @@ static int vlc_multi_gen(VLC_MULTI_ELEM *table, const VLC *single,
 {
     int minbits, maxbits, max;
     unsigned count[VLC_MULTI_MAX_SYMBOLS-1] = { 0, };
-    VLC_MULTI_ELEM info = { { 0, }, 0, 0, };
+    VLC_MULTI_ELEM info = { 0 };
     int count0 = 0;
 
     for (int j = 0; j < 1<<numbits; j++) {
@@ -431,7 +499,10 @@ static int vlc_multi_gen(VLC_MULTI_ELEM *table, const VLC *single,
     for (int j = 0; j < 1<<numbits; j++) {
         table[j].len = single->table[j].len;
         table[j].num = single->table[j].len > 0 ? 1 : 0;
-        AV_WN16(table[j].val, single->table[j].sym);
+        if (is16bit)
+            table[j].val16[0] = single->table[j].sym;
+        else
+            table[j].val8[0]  = single->table[j].sym;
     }
 
     add_level(table, is16bit, nb_codes, numbits, buf,
@@ -458,7 +529,7 @@ int ff_vlc_init_multi_from_lengths(VLC *vlc, VLC_MULTI *multi, int nb_bits, int 
 
     multi->table = av_malloc(sizeof(*multi->table) << nb_bits);
     if (!multi->table)
-        return AVERROR(ENOMEM);
+        goto fail;
 
     j = code = 0;
     for (int i = 0; i < nb_codes; i++, lens += lens_wrap) {

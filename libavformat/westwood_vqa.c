@@ -201,8 +201,10 @@ static int wsvqa_read_packet(AVFormatContext *s,
             /* We need a big seekback buffer because there can be SNxx, VIEW and ZBUF
              * chunks (<512 KiB total) in the stream before we read VQFR (<256 KiB) and
              * seek back here. */
-            ffio_ensure_seekback(pb, wsvqa->vqfl_chunk_size + (512 + 256) * 1024);
+            ret = ffio_ensure_seekback(pb, wsvqa->vqfl_chunk_size + (512 + 256) * 1024);
             avio_skip(pb, chunk_size + skip_byte);
+            if (ret < 0)
+                return ret;
             continue;
         } else if ((chunk_type == SND0_TAG) || (chunk_type == SND1_TAG) ||
             (chunk_type == SND2_TAG) || (chunk_type == VQFR_TAG)) {
@@ -262,7 +264,7 @@ static int wsvqa_read_packet(AVFormatContext *s,
                     break;
                 case SND2_TAG:
                     /* 2 samples/byte, 1 or 2 samples per frame depending on stereo */
-                    pkt->duration = (chunk_size * 2) / wsvqa->channels;
+                    pkt->duration = (chunk_size * 2LL) / wsvqa->channels;
                     break;
                 }
                 break;
@@ -317,9 +319,9 @@ static int wsvqa_read_packet(AVFormatContext *s,
     return ret;
 }
 
-const AVInputFormat ff_wsvqa_demuxer = {
-    .name           = "wsvqa",
-    .long_name      = NULL_IF_CONFIG_SMALL("Westwood Studios VQA"),
+const FFInputFormat ff_wsvqa_demuxer = {
+    .p.name         = "wsvqa",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Westwood Studios VQA"),
     .priv_data_size = sizeof(WsVqaDemuxContext),
     .read_probe     = wsvqa_probe,
     .read_header    = wsvqa_read_header,

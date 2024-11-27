@@ -16,6 +16,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavutil/mem.h"
 #include "cbs.h"
 #include "cbs_internal.h"
 #include "cbs_jpeg.h"
@@ -145,13 +146,13 @@ static int cbs_jpeg_split_fragment(CodedBitstreamContext *ctx,
             }
         } else {
             i = start;
-            if (i + 2 > frag->data_size) {
+            if (i > frag->data_size - 2) {
                 av_log(ctx->log_ctx, AV_LOG_ERROR, "Invalid JPEG image: "
                        "truncated at %02x marker.\n", marker);
                 return AVERROR_INVALIDDATA;
             }
             length = AV_RB16(frag->data + i);
-            if (i + length > frag->data_size) {
+            if (length > frag->data_size - i) {
                 av_log(ctx->log_ctx, AV_LOG_ERROR, "Invalid JPEG image: "
                        "truncated at %02x marker segment.\n", marker);
                 return AVERROR_INVALIDDATA;

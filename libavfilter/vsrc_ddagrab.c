@@ -34,6 +34,7 @@
 #include <dxgi1_5.h>
 #endif
 
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/time.h"
 #include "libavutil/avstring.h"
@@ -42,7 +43,7 @@
 #include "libavutil/hwcontext_d3d11va.h"
 #include "compat/w32dlfcn.h"
 #include "avfilter.h"
-#include "internal.h"
+#include "filters.h"
 #include "video.h"
 
 #include "vsrc_ddagrab_shaders.h"
@@ -82,6 +83,7 @@ typedef struct DdagrabContext {
     int raw_height;
 
     ID3D11Texture2D *probed_texture;
+    ID3D11Texture2D *buffer_texture;
 
     ID3D11VertexShader *vertex_shader;
     ID3D11InputLayout *input_layout;
@@ -101,6 +103,7 @@ typedef struct DdagrabContext {
     int        out_fmt;
     int        allow_fallback;
     int        force_fmt;
+    int        dup_frames;
 } DdagrabContext;
 
 #define OFFSET(x) offsetof(DdagrabContext, x)
@@ -112,18 +115,20 @@ static const AVOption ddagrab_options[] = {
     { "video_size", "set video frame size",        OFFSET(width),      AV_OPT_TYPE_IMAGE_SIZE, { .str = NULL },       0,       0, FLAGS },
     { "offset_x",   "capture area x offset",       OFFSET(offset_x),   AV_OPT_TYPE_INT,        { .i64 = 0    }, INT_MIN, INT_MAX, FLAGS },
     { "offset_y",   "capture area y offset",       OFFSET(offset_y),   AV_OPT_TYPE_INT,        { .i64 = 0    }, INT_MIN, INT_MAX, FLAGS },
-    { "output_fmt", "desired output format",       OFFSET(out_fmt),    AV_OPT_TYPE_INT,        { .i64 = DXGI_FORMAT_B8G8R8A8_UNORM },    0, INT_MAX, FLAGS, "output_fmt" },
-    { "auto",       "let dda pick its preferred format", 0,            AV_OPT_TYPE_CONST,      { .i64 = 0 },                             0, INT_MAX, FLAGS, "output_fmt" },
-    { "8bit",       "only output default 8 Bit format",  0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_B8G8R8A8_UNORM },    0, INT_MAX, FLAGS, "output_fmt" },
-    { "bgra",       "only output 8 Bit BGRA",            0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_B8G8R8A8_UNORM },    0, INT_MAX, FLAGS, "output_fmt" },
-    { "10bit",      "only output default 10 Bit format", 0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_R10G10B10A2_UNORM }, 0, INT_MAX, FLAGS, "output_fmt" },
-    { "x2bgr10",    "only output 10 Bit X2BGR10",        0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_R10G10B10A2_UNORM }, 0, INT_MAX, FLAGS, "output_fmt" },
-    { "16bit",      "only output default 16 Bit format", 0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_R16G16B16A16_FLOAT },0, INT_MAX, FLAGS, "output_fmt" },
-    { "rgbaf16",    "only output 16 Bit RGBAF16",        0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_R16G16B16A16_FLOAT },0, INT_MAX, FLAGS, "output_fmt" },
+    { "output_fmt", "desired output format",       OFFSET(out_fmt),    AV_OPT_TYPE_INT,        { .i64 = DXGI_FORMAT_B8G8R8A8_UNORM },    0, INT_MAX, FLAGS, .unit = "output_fmt" },
+    { "auto",       "let dda pick its preferred format", 0,            AV_OPT_TYPE_CONST,      { .i64 = 0 },                             0, INT_MAX, FLAGS, .unit = "output_fmt" },
+    { "8bit",       "only output default 8 Bit format",  0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_B8G8R8A8_UNORM },    0, INT_MAX, FLAGS, .unit = "output_fmt" },
+    { "bgra",       "only output 8 Bit BGRA",            0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_B8G8R8A8_UNORM },    0, INT_MAX, FLAGS, .unit = "output_fmt" },
+    { "10bit",      "only output default 10 Bit format", 0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_R10G10B10A2_UNORM }, 0, INT_MAX, FLAGS, .unit = "output_fmt" },
+    { "x2bgr10",    "only output 10 Bit X2BGR10",        0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_R10G10B10A2_UNORM }, 0, INT_MAX, FLAGS, .unit = "output_fmt" },
+    { "16bit",      "only output default 16 Bit format", 0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_R16G16B16A16_FLOAT },0, INT_MAX, FLAGS, .unit = "output_fmt" },
+    { "rgbaf16",    "only output 16 Bit RGBAF16",        0,            AV_OPT_TYPE_CONST,      { .i64 = DXGI_FORMAT_R16G16B16A16_FLOAT },0, INT_MAX, FLAGS, .unit = "output_fmt" },
     { "allow_fallback", "don't error on fallback to default 8 Bit format",
                                                    OFFSET(allow_fallback), AV_OPT_TYPE_BOOL,   { .i64 = 0    },       0,       1, FLAGS },
     { "force_fmt",  "exclude BGRA from format list (experimental, discouraged by Microsoft)",
                                                    OFFSET(force_fmt),  AV_OPT_TYPE_BOOL,       { .i64 = 0    },       0,       1, FLAGS },
+    { "dup_frames", "duplicate frames to maintain framerate",
+                                                   OFFSET(dup_frames), AV_OPT_TYPE_BOOL,       { .i64 = 1    },       0,       1, FLAGS },
     { NULL }
 };
 
@@ -151,6 +156,7 @@ static av_cold void ddagrab_uninit(AVFilterContext *avctx)
     release_resource(&dda->const_buffer);
 
     release_resource(&dda->probed_texture);
+    release_resource(&dda->buffer_texture);
 
     release_resource(&dda->dxgi_outdupl);
     release_resource(&dda->mouse_resource_view);
@@ -704,9 +710,29 @@ static int next_frame_internal(AVFilterContext *avctx, ID3D11Texture2D **desktop
             goto error;
     }
 
-    if (need_frame && (!frame_info.LastPresentTime.QuadPart || !frame_info.AccumulatedFrames)) {
-        ret = AVERROR(EAGAIN);
-        goto error;
+    if (!frame_info.LastPresentTime.QuadPart || !frame_info.AccumulatedFrames) {
+        if (need_frame) {
+            ret = AVERROR(EAGAIN);
+            goto error;
+        }
+
+        // Unforunately, we can't rely on the desktop_resource's format in this case.
+        // The API might even return it in with a format that was not in the initial
+        // list of supported formats, and it can change/flicker randomly.
+        // To work around this, return an internal copy of the last valid texture we got.
+        release_resource(&desktop_resource);
+
+        // The initial probing should make this impossible.
+        if (!dda->buffer_texture) {
+            av_log(avctx, AV_LOG_ERROR, "No buffer texture while operating!\n");
+            ret = AVERROR_BUG;
+            goto error;
+        }
+
+        av_log(avctx, AV_LOG_TRACE, "Returning internal buffer for a frame!\n");
+        ID3D11Texture2D_AddRef(dda->buffer_texture);
+        *desktop_texture = dda->buffer_texture;
+        return 0;
     }
 
     hr = IDXGIResource_QueryInterface(desktop_resource, &IID_ID3D11Texture2D, (void**)desktop_texture);
@@ -716,6 +742,27 @@ static int next_frame_internal(AVFilterContext *avctx, ID3D11Texture2D **desktop
         ret = AVERROR_EXTERNAL;
         goto error;
     }
+
+    if (!dda->buffer_texture) {
+        D3D11_TEXTURE2D_DESC desc;
+        ID3D11Texture2D_GetDesc(*desktop_texture, &desc);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = 0;
+
+        hr = ID3D11Device_CreateTexture2D(dda->device_hwctx->device, &desc, NULL, &dda->buffer_texture);
+        if (FAILED(hr)) {
+            release_resource(desktop_texture);
+            av_log(avctx, AV_LOG_ERROR, "Failed creating internal buffer texture.\n");
+            ret = AVERROR(ENOMEM);
+            goto error;
+        }
+    }
+
+    ID3D11DeviceContext_CopyResource(dda->device_hwctx->device_context,
+                                     (ID3D11Resource*)dda->buffer_texture,
+                                     (ID3D11Resource*)*desktop_texture);
 
     return 0;
 
@@ -807,6 +854,7 @@ fail:
 
 static int ddagrab_config_props(AVFilterLink *outlink)
 {
+    FilterLink *l = ff_filter_link(outlink);
     AVFilterContext *avctx = outlink->src;
     DdagrabContext *dda = avctx->priv;
     int ret;
@@ -868,14 +916,14 @@ static int ddagrab_config_props(AVFilterLink *outlink)
     if (ret < 0)
         return ret;
 
-    outlink->hw_frames_ctx = av_buffer_ref(dda->frames_ref);
-    if (!outlink->hw_frames_ctx)
+    l->hw_frames_ctx = av_buffer_ref(dda->frames_ref);
+    if (!l->hw_frames_ctx)
         return AVERROR(ENOMEM);
 
     outlink->w = dda->width;
     outlink->h = dda->height;
     outlink->time_base = (AVRational){1, TIMER_RES};
-    outlink->frame_rate = dda->framerate;
+    l->frame_rate = dda->framerate;
 
     return 0;
 }
@@ -1067,7 +1115,9 @@ static int ddagrab_request_frame(AVFilterLink *outlink)
     now -= dda->first_pts;
 
     if (!dda->probed_texture) {
-        ret = next_frame_internal(avctx, &cur_texture, 0);
+        do {
+            ret = next_frame_internal(avctx, &cur_texture, 0);
+        } while (ret == AVERROR(EAGAIN) && !dda->dup_frames);
     } else {
         cur_texture = dda->probed_texture;
         dda->probed_texture = NULL;
@@ -1103,7 +1153,7 @@ static int ddagrab_request_frame(AVFilterLink *outlink)
     if (desc.Format != dda->raw_format ||
         (int)desc.Width != dda->raw_width ||
         (int)desc.Height != dda->raw_height) {
-        av_log(avctx, AV_LOG_ERROR, "Output parameters changed!");
+        av_log(avctx, AV_LOG_ERROR, "Output parameters changed!\n");
         ret = AVERROR_OUTPUT_CHANGED;
         goto fail;
     }

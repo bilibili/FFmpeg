@@ -34,7 +34,6 @@
 #include "avfilter.h"
 #include "filters.h"
 #include "framesync.h"
-#include "internal.h"
 
 #include "cuda/load_helper.h"
 
@@ -236,6 +235,7 @@ static int overlay_cuda_blend(FFFrameSync *fs)
     OverlayCUDAContext *ctx = avctx->priv;
     AVFilterLink *outlink = avctx->outputs[0];
     AVFilterLink *inlink = avctx->inputs[0];
+    FilterLink *inl = ff_filter_link(inlink);
 
     CudaFunctions *cu = ctx->hwctx->internal->cuda_dl;
     CUcontext dummy, cuda_ctx = ctx->hwctx->cuda_ctx;
@@ -270,7 +270,7 @@ static int overlay_cuda_blend(FFFrameSync *fs)
     }
 
     if (ctx->eval_mode == EVAL_MODE_FRAME) {
-        ctx->var_values[VAR_N] = inlink->frame_count_out;
+        ctx->var_values[VAR_N] = inl->frame_count_out;
         ctx->var_values[VAR_T] = input_main->pts == AV_NOPTS_VALUE ?
             NAN : input_main->pts * av_q2d(inlink->time_base);
 
@@ -436,14 +436,17 @@ static int overlay_cuda_config_output(AVFilterLink *outlink)
     extern const unsigned int ff_vf_overlay_cuda_ptx_len;
 
     int err;
+    FilterLink       *outl = ff_filter_link(outlink);
     AVFilterContext* avctx = outlink->src;
     OverlayCUDAContext* ctx = avctx->priv;
 
     AVFilterLink *inlink = avctx->inputs[0];
-    AVHWFramesContext  *frames_ctx = (AVHWFramesContext*)inlink->hw_frames_ctx->data;
+    FilterLink *inl = ff_filter_link(inlink);
+    AVHWFramesContext  *frames_ctx = (AVHWFramesContext*)inl->hw_frames_ctx->data;
 
     AVFilterLink *inlink_overlay = avctx->inputs[1];
-    AVHWFramesContext  *frames_ctx_overlay = (AVHWFramesContext*)inlink_overlay->hw_frames_ctx->data;
+    FilterLink *inl_overlay = ff_filter_link(inlink_overlay);
+    AVHWFramesContext  *frames_ctx_overlay = (AVHWFramesContext*)inl_overlay->hw_frames_ctx->data;
 
     CUcontext dummy, cuda_ctx;
     CudaFunctions *cu;
@@ -496,8 +499,8 @@ static int overlay_cuda_config_output(AVFilterLink *outlink)
 
     ctx->cu_stream = ctx->hwctx->stream;
 
-    outlink->hw_frames_ctx = av_buffer_ref(inlink->hw_frames_ctx);
-    if (!outlink->hw_frames_ctx)
+    outl->hw_frames_ctx = av_buffer_ref(inl->hw_frames_ctx);
+    if (!outl->hw_frames_ctx)
         return AVERROR(ENOMEM);
 
     // load functions
@@ -542,11 +545,11 @@ static const AVOption overlay_cuda_options[] = {
     { "y", "set the y expression of overlay", OFFSET(y_expr), AV_OPT_TYPE_STRING, { .str = "0" }, 0, 0, FLAGS },
     { "eof_action", "Action to take when encountering EOF from secondary input ",
         OFFSET(fs.opt_eof_action), AV_OPT_TYPE_INT, { .i64 = EOF_ACTION_REPEAT },
-        EOF_ACTION_REPEAT, EOF_ACTION_PASS, .flags = FLAGS, "eof_action" },
-        { "repeat", "Repeat the previous frame.",   0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_REPEAT }, .flags = FLAGS, "eof_action" },
-        { "endall", "End both streams.",            0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_ENDALL }, .flags = FLAGS, "eof_action" },
-        { "pass",   "Pass through the main input.", 0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_PASS },   .flags = FLAGS, "eof_action" },
-    { "eval", "specify when to evaluate expressions", OFFSET(eval_mode), AV_OPT_TYPE_INT, { .i64 = EVAL_MODE_FRAME }, 0, EVAL_MODE_NB - 1, FLAGS, "eval" },
+        EOF_ACTION_REPEAT, EOF_ACTION_PASS, .flags = FLAGS, .unit = "eof_action" },
+        { "repeat", "Repeat the previous frame.",   0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_REPEAT }, .flags = FLAGS, .unit = "eof_action" },
+        { "endall", "End both streams.",            0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_ENDALL }, .flags = FLAGS, .unit = "eof_action" },
+        { "pass",   "Pass through the main input.", 0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_PASS },   .flags = FLAGS, .unit = "eof_action" },
+    { "eval", "specify when to evaluate expressions", OFFSET(eval_mode), AV_OPT_TYPE_INT, { .i64 = EVAL_MODE_FRAME }, 0, EVAL_MODE_NB - 1, FLAGS, .unit = "eval" },
          { "init",  "eval expressions once during initialization", 0, AV_OPT_TYPE_CONST, { .i64=EVAL_MODE_INIT },  .flags = FLAGS, .unit = "eval" },
          { "frame", "eval expressions per-frame",                  0, AV_OPT_TYPE_CONST, { .i64=EVAL_MODE_FRAME }, .flags = FLAGS, .unit = "eval" },
     { "shortest", "force termination when the shortest input terminates", OFFSET(fs.opt_shortest), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },

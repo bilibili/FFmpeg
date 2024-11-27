@@ -29,13 +29,14 @@
 #include <libvmaf.h>
 
 #include "libavutil/avstring.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "avfilter.h"
 #include "drawutils.h"
+#include "filters.h"
 #include "formats.h"
 #include "framesync.h"
-#include "internal.h"
 #include "video.h"
 
 #if CONFIG_LIBVMAF_CUDA_FILTER
@@ -48,18 +49,11 @@
 typedef struct LIBVMAFContext {
     const AVClass *class;
     FFFrameSync fs;
-    char *model_path;
     char *log_path;
     char *log_fmt;
-    int enable_transform;
-    int phone_model;
-    int psnr;
-    int ssim;
-    int ms_ssim;
     char *pool;
     int n_threads;
     int n_subsample;
-    int enable_conf_interval;
     char *model_cfg;
     char *feature_cfg;
     VmafContext *vmaf;
@@ -175,7 +169,6 @@ static int do_vmaf(FFFrameSync *fs)
     return ff_filter_frame(ctx->outputs[0], dist);
 }
 
-
 static AVDictionary **delimited_dict_parse(char *str, unsigned *cnt)
 {
     AVDictionary **dict = NULL;
@@ -251,7 +244,7 @@ static int parse_features(AVFilterContext *ctx)
         const AVDictionaryEntry *e = NULL;
 
         while (e = av_dict_iterate(dict[i], e)) {
-            if (av_stristr(e->key, "name")) {
+            if (!strcmp(e->key, "name")) {
                 feature_name = e->value;
                 continue;
             }
@@ -312,29 +305,29 @@ static int parse_models(AVFilterContext *ctx)
         char  *path = NULL;
 
         while (e = av_dict_iterate(dict[i], e)) {
-            if (av_stristr(e->key, "disable_clip")) {
-                model_cfg.flags |= av_stristr(e->value, "true") ?
+            if (!strcmp(e->key, "disable_clip")) {
+                model_cfg.flags |= !strcmp(e->value, "true") ?
                     VMAF_MODEL_FLAG_DISABLE_CLIP : 0;
                 continue;
             }
 
-            if (av_stristr(e->key, "enable_transform")) {
-                model_cfg.flags |= av_stristr(e->value, "true") ?
+            if (!strcmp(e->key, "enable_transform")) {
+                model_cfg.flags |= !strcmp(e->value, "true") ?
                     VMAF_MODEL_FLAG_ENABLE_TRANSFORM : 0;
                 continue;
             }
 
-            if (av_stristr(e->key, "name")) {
+            if (!strcmp(e->key, "name")) {
                 model_cfg.name = e->value;
                 continue;
             }
 
-            if (av_stristr(e->key, "version")) {
+            if (!strcmp(e->key, "version")) {
                 version = e->value;
                 continue;
             }
 
-            if (av_stristr(e->key, "path")) {
+            if (!strcmp(e->key, "path")) {
                 path = e->value;
                 continue;
             }
@@ -504,6 +497,8 @@ static int config_output(AVFilterLink *outlink)
     AVFilterContext *ctx = outlink->src;
     LIBVMAFContext *s = ctx->priv;
     AVFilterLink *mainlink = ctx->inputs[0];
+    FilterLink *il = ff_filter_link(mainlink);
+    FilterLink *ol = ff_filter_link(outlink);
     int ret;
 
     ret = ff_framesync_init_dualinput(&s->fs, ctx);
@@ -513,7 +508,7 @@ static int config_output(AVFilterLink *outlink)
     outlink->h = mainlink->h;
     outlink->time_base = mainlink->time_base;
     outlink->sample_aspect_ratio = mainlink->sample_aspect_ratio;
-    outlink->frame_rate = mainlink->frame_rate;
+    ol->frame_rate = il->frame_rate;
     if ((ret = ff_framesync_configure(&s->fs)) < 0)
         return ret;
 
@@ -529,13 +524,13 @@ static int activate(AVFilterContext *ctx)
 static enum VmafOutputFormat log_fmt_map(const char *log_fmt)
 {
     if (log_fmt) {
-        if (av_stristr(log_fmt, "xml"))
+        if (!strcmp(log_fmt, "xml"))
             return VMAF_OUTPUT_FORMAT_XML;
-        if (av_stristr(log_fmt, "json"))
+        if (!strcmp(log_fmt, "json"))
             return VMAF_OUTPUT_FORMAT_JSON;
-        if (av_stristr(log_fmt, "csv"))
+        if (!strcmp(log_fmt, "csv"))
             return VMAF_OUTPUT_FORMAT_CSV;
-        if (av_stristr(log_fmt, "sub"))
+        if (!strcmp(log_fmt, "sub"))
             return VMAF_OUTPUT_FORMAT_SUB;
     }
 
@@ -545,11 +540,11 @@ static enum VmafOutputFormat log_fmt_map(const char *log_fmt)
 static enum VmafPoolingMethod pool_method_map(const char *pool_method)
 {
     if (pool_method) {
-        if (av_stristr(pool_method, "min"))
+        if (!strcmp(pool_method, "min"))
             return VMAF_POOL_METHOD_MIN;
-        if (av_stristr(pool_method, "mean"))
+        if (!strcmp(pool_method, "mean"))
             return VMAF_POOL_METHOD_MEAN;
-        if (av_stristr(pool_method, "harmonic_mean"))
+        if (!strcmp(pool_method, "harmonic_mean"))
             return VMAF_POOL_METHOD_HARMONIC_MEAN;
     }
 
@@ -606,7 +601,8 @@ static const AVFilterPad libvmaf_inputs[] = {
     {
         .name         = "main",
         .type         = AVMEDIA_TYPE_VIDEO,
-    },{
+    },
+    {
         .name         = "reference",
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = config_input_ref,
@@ -657,7 +653,8 @@ static int config_props_cuda(AVFilterLink *outlink)
     AVFilterContext *ctx = outlink->src;
     LIBVMAFContext *s = ctx->priv;
     AVFilterLink *inlink = ctx->inputs[0];
-    AVHWFramesContext *frames_ctx = (AVHWFramesContext*) inlink->hw_frames_ctx->data;
+    FilterLink      *inl = ff_filter_link(inlink);
+    AVHWFramesContext *frames_ctx = (AVHWFramesContext*) inl->hw_frames_ctx->data;
     AVCUDADeviceContext *device_hwctx = frames_ctx->device_ctx->hwctx;
     CUcontext cu_ctx = device_hwctx->cuda_ctx;
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(frames_ctx->sw_format);
@@ -762,7 +759,8 @@ static int do_vmaf_cuda(FFFrameSync* fs)
     AVFilterContext* ctx = fs->parent;
     LIBVMAFContext* s = ctx->priv;
     AVFilterLink *inlink = ctx->inputs[0];
-    AVHWFramesContext *frames_ctx = (AVHWFramesContext*) inlink->hw_frames_ctx->data;
+    FilterLink      *inl = ff_filter_link(inlink);
+    AVHWFramesContext *frames_ctx = (AVHWFramesContext*)inl->hw_frames_ctx->data;
     AVCUDADeviceContext *device_hwctx = frames_ctx->device_ctx->hwctx;
     VmafPicture pic_ref, pic_dist;
     AVFrame *ref, *dist;

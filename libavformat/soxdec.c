@@ -32,7 +32,9 @@
 #include "libavutil/intreadwrite.h"
 #include "libavutil/intfloat.h"
 #include "libavutil/dict.h"
+#include "libavutil/mem.h"
 #include "avformat.h"
+#include "demux.h"
 #include "internal.h"
 #include "pcm.h"
 #include "sox.h"
@@ -131,9 +133,9 @@ static int sox_read_header(AVFormatContext *s)
     return 0;
 }
 
-const AVInputFormat ff_sox_demuxer = {
-    .name           = "sox",
-    .long_name      = NULL_IF_CONFIG_SMALL("SoX (Sound eXchange) native"),
+const FFInputFormat ff_sox_demuxer = {
+    .p.name         = "sox",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("SoX (Sound eXchange) native"),
     .read_probe     = sox_probe,
     .read_header    = sox_read_header,
     .read_packet    = ff_pcm_read_packet,

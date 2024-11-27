@@ -25,7 +25,8 @@
 #include "libavutil/opt.h"
 #include "vulkan_filter.h"
 #include "vulkan_spirv.h"
-#include "internal.h"
+
+#include "filters.h"
 #include "framesync.h"
 #include "blend.h"
 #include "video.h"
@@ -299,9 +300,11 @@ static av_cold void uninit(AVFilterContext *avctx)
 static int config_props_output(AVFilterLink *outlink)
 {
     int err;
+    FilterLink *outl       = ff_filter_link(outlink);
     AVFilterContext *avctx = outlink->src;
     BlendVulkanContext *s = avctx->priv;
     AVFilterLink *toplink = avctx->inputs[IN_TOP];
+    FilterLink   *tl      = ff_filter_link(toplink);
     AVFilterLink *bottomlink = avctx->inputs[IN_BOTTOM];
 
     if (toplink->w != bottomlink->w || toplink->h != bottomlink->h) {
@@ -314,7 +317,7 @@ static int config_props_output(AVFilterLink *outlink)
     }
 
     outlink->sample_aspect_ratio = toplink->sample_aspect_ratio;
-    outlink->frame_rate = toplink->frame_rate;
+    outl->frame_rate = tl->frame_rate;
 
     RET(ff_vk_filter_config_output(outlink));
 
@@ -339,13 +342,13 @@ static int activate(AVFilterContext *avctx)
 #define FLAGS (AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
 
 static const AVOption blend_vulkan_options[] = {
-    { "c0_mode", "set component #0 blend mode", OFFSET(params[0].mode), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, BLEND_NB - 1, FLAGS, "mode" },
-    { "c1_mode", "set component #1 blend mode", OFFSET(params[1].mode), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, BLEND_NB - 1, FLAGS, "mode" },
-    { "c2_mode", "set component #2 blend mode", OFFSET(params[2].mode), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, BLEND_NB - 1, FLAGS, "mode" },
-    { "c3_mode", "set component #3 blend mode", OFFSET(params[3].mode), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, BLEND_NB - 1, FLAGS, "mode" },
-    { "all_mode", "set blend mode for all components", OFFSET(all_mode), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, BLEND_NB - 1, FLAGS, "mode" },
-        { "normal",   "", 0, AV_OPT_TYPE_CONST, { .i64 = BLEND_NORMAL   }, 0, 0, FLAGS, "mode" },
-        { "multiply", "", 0, AV_OPT_TYPE_CONST, { .i64 = BLEND_MULTIPLY }, 0, 0, FLAGS, "mode" },
+    { "c0_mode", "set component #0 blend mode", OFFSET(params[0].mode), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, BLEND_NB - 1, FLAGS, .unit = "mode" },
+    { "c1_mode", "set component #1 blend mode", OFFSET(params[1].mode), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, BLEND_NB - 1, FLAGS, .unit = "mode" },
+    { "c2_mode", "set component #2 blend mode", OFFSET(params[2].mode), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, BLEND_NB - 1, FLAGS, .unit = "mode" },
+    { "c3_mode", "set component #3 blend mode", OFFSET(params[3].mode), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, BLEND_NB - 1, FLAGS, .unit = "mode" },
+    { "all_mode", "set blend mode for all components", OFFSET(all_mode), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, BLEND_NB - 1, FLAGS, .unit = "mode" },
+        { "normal",   "", 0, AV_OPT_TYPE_CONST, { .i64 = BLEND_NORMAL   }, 0, 0, FLAGS, .unit = "mode" },
+        { "multiply", "", 0, AV_OPT_TYPE_CONST, { .i64 = BLEND_MULTIPLY }, 0, 0, FLAGS, .unit = "mode" },
 
     { "c0_opacity",  "set color component #0 opacity", OFFSET(params[0].opacity), AV_OPT_TYPE_DOUBLE, { .dbl = 1 }, 0, 1, FLAGS },
     { "c1_opacity",  "set color component #1 opacity", OFFSET(params[1].opacity), AV_OPT_TYPE_DOUBLE, { .dbl = 1 }, 0, 1, FLAGS },

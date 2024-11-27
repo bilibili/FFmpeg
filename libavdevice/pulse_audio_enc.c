@@ -471,10 +471,11 @@ static av_cold int pulse_write_header(AVFormatContext *h)
     s->nonblocking = (h->flags & AVFMT_FLAG_NONBLOCK);
 
     if (s->buffer_duration) {
-        int64_t bytes = s->buffer_duration;
-        bytes *= st->codecpar->ch_layout.nb_channels * st->codecpar->sample_rate *
-                 av_get_bytes_per_sample(st->codecpar->format);
-        bytes /= 1000;
+        int64_t bytes = av_rescale(s->buffer_duration,
+                                   st->codecpar->ch_layout.nb_channels *
+                                    (int64_t)st->codecpar->sample_rate *
+                                    av_get_bytes_per_sample(st->codecpar->format),
+                                   1000);
         buffer_attributes.tlength = FFMAX(s->buffer_size, av_clip64(bytes, 0, UINT32_MAX - 1));
         av_log(s, AV_LOG_DEBUG,
                "Buffer duration: %ums recalculated into %"PRId64" bytes buffer.\n",
@@ -504,7 +505,7 @@ static av_cold int pulse_write_header(AVFormatContext *h)
         pulse_map_channels_to_pulse(&st->codecpar->ch_layout, &channel_map);
         /* Unknown channel is present in channel_layout, let PulseAudio use its default. */
         if (channel_map.channels != sample_spec.channels) {
-            av_log(s, AV_LOG_WARNING, "Unknown channel. Using defaul channel map.\n");
+            av_log(s, AV_LOG_WARNING, "Unknown channel. Using default channel map.\n");
             channel_map.channels = 0;
         }
     } else
@@ -687,13 +688,6 @@ static int pulse_write_frame(AVFormatContext *h, int stream_index,
     pkt.data     = (*frame)->data[0];
     pkt.size     = (*frame)->nb_samples * av_get_bytes_per_sample((*frame)->format) * (*frame)->ch_layout.nb_channels;
     pkt.dts      = (*frame)->pkt_dts;
-#if FF_API_PKT_DURATION
-FF_DISABLE_DEPRECATION_WARNINGS
-    if ((*frame)->pkt_duration)
-        pkt.duration = (*frame)->pkt_duration;
-    else
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
     pkt.duration = (*frame)->duration;
     return pulse_write_packet(h, &pkt);
 }
@@ -808,5 +802,5 @@ const FFOutputFormat ff_pulse_muxer = {
     .p.flags              = AVFMT_NOFILE,
 #endif
     .p.priv_class         = &pulse_muxer_class,
-    .flags_internal       = FF_FMT_ALLOW_FLUSH,
+    .flags_internal       = FF_OFMT_FLAG_ALLOW_FLUSH,
 };

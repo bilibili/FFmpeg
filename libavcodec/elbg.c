@@ -28,6 +28,7 @@
 #include "libavutil/avassert.h"
 #include "libavutil/common.h"
 #include "libavutil/lfg.h"
+#include "libavutil/mem.h"
 #include "elbg.h"
 
 #define DELTA_ERR_MAX 0.1  ///< Precision of the ELBG algorithm (as percentage error)
@@ -361,7 +362,7 @@ static void do_shiftings(ELBGContext *elbg)
         }
 }
 
-static void do_elbg(ELBGContext *av_restrict elbg, int *points, int numpoints,
+static void do_elbg(ELBGContext *restrict elbg, int *points, int numpoints,
                     int max_steps)
 {
     int *const size_part = elbg->size_part;
@@ -435,7 +436,7 @@ static void do_elbg(ELBGContext *av_restrict elbg, int *points, int numpoints,
  * If not, it calls do_elbg for a (smaller) random sample of the points in
  * points.
  */
-static void init_elbg(ELBGContext *av_restrict elbg, int *points, int *temp_points,
+static void init_elbg(ELBGContext *restrict elbg, int *points, int *temp_points,
                       int numpoints, int max_steps)
 {
     int dim = elbg->dim;
@@ -463,7 +464,7 @@ int avpriv_elbg_do(ELBGContext **elbgp, int *points, int dim, int numpoints,
                    int *codebook, int num_cb, int max_steps,
                    int *closest_cb, AVLFG *rand_state, uintptr_t flags)
 {
-    ELBGContext *const av_restrict elbg = *elbgp ? *elbgp : av_mallocz(sizeof(*elbg));
+    ELBGContext *const restrict elbg = *elbgp ? *elbgp : av_mallocz(sizeof(*elbg));
 
     if (!elbg)
         return AVERROR(ENOMEM);

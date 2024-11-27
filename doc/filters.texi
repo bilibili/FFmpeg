@@ -307,10 +307,6 @@ For example, in case of the @ref{drawtext,,drawtext filter}, you might prefer to
 use the @option{textfile} option in place of @option{text} to specify the text
 to render.
 
-When using the @command{ffmpeg} tool, you might consider to use the
-@ref{filter_script option,,-filter_script option,ffmpeg} or
-@ref{filter_complex_script option,,-filter_complex_script option,ffmpeg}.
-
 @chapter Timeline editing
 
 Some filters support a generic @option{enable} option. For the filters
@@ -417,6 +413,63 @@ The configure output will show the audio filters included in your
 build.
 
 Below is a description of the currently available audio filters.
+
+@section aap
+Apply Affine Projection algorithm to the first audio stream using the second audio stream.
+
+This adaptive filter is used to estimate unknown audio based on multiple input audio samples.
+Affine projection algorithm can make trade-offs between computation complexity with convergence speed.
+
+A description of the accepted options follows.
+
+@table @option
+@item order
+Set the filter order.
+
+@item projection
+Set the projection order.
+
+@item mu
+Set the filter mu.
+
+@item delta
+Set the coefficient to initialize internal covariance matrix.
+
+@item out_mode
+Set the filter output samples. It accepts the following values:
+@table @option
+@item i
+Pass the 1st input.
+
+@item d
+Pass the 2nd input.
+
+@item o
+Pass difference between desired, 2nd input and error signal estimate.
+
+@item n
+Pass difference between input, 1st input and error signal estimate.
+
+@item e
+Pass error signal estimated samples.
+
+Default value is @var{o}.
+@end table
+
+@item precision
+Set which precision to use when processing samples.
+
+@table @option
+@item auto
+Auto pick internal sample format depending on other filters.
+
+@item float
+Always use single-floating point precision sample format.
+
+@item double
+Always use double-floating point precision sample format.
+@end table
+@end table
 
 @section acompressor
 
@@ -1054,12 +1107,16 @@ Set the mode of filter operation, can be one of the following:
 @table @samp
 @item listen
 Output only isolated detection signal.
-@item cut
+@item cutbelow
+Cut frequencies below detection threshold.
+@item cutabove
 Cut frequencies above detection threshold.
-@item boost
-Boost frequencies bellow detection threshold.
+@item boostbelow
+Boost frequencies below detection threshold.
+@item boostabove
+Boost frequencies above detection threshold.
 @end table
-Default mode is @samp{cut}.
+Default mode is @samp{cutbelow}.
 
 @item dftype
 Set the type of detection filter, can be one of the following:
@@ -1082,16 +1139,6 @@ Set the type of target filter, can be one of the following:
 @end table
 Default type is @samp{bell}.
 
-@item direction
-Set processing direction relative to threshold.
-@table @samp
-@item downward
-Boost/Cut if threshold is higher/lower than detected volume.
-@item upward
-Boost/Cut if threshold is lower/higher than detected volume.
-@end table
-Default direction is @samp{downward}.
-
 @item auto
 Automatically gather threshold from detection filter. By default
 is @samp{disabled}.
@@ -1106,6 +1153,8 @@ Disable using automatically gathered threshold value.
 Stop picking threshold value.
 @item on
 Start picking threshold value.
+@item adaptive
+Adaptively pick threshold value, by calculating sliding window entropy.
 @end table
 
 @item precision
@@ -1798,33 +1847,24 @@ Set wet gain. This sets final output gain.
 Set Impulse Response filter length. Default is 1, which means whole IR is processed.
 
 @item gtype
-Enable applying gain measured from power of IR.
+This option is deprecated, and does nothing.
 
-Set which approach to use for auto gain measurement.
+@item irnorm
+Set norm to be applied to IR coefficients before filtering.
+Allowed range is from @var{-1} to @var{2}.
+IR coefficients are normalized with calculated vector norm set by this option.
+For negative values, no norm is calculated, and IR coefficients are not modified at all.
+Default is @var{1}.
 
-@table @option
-@item none
-Do not apply any gain.
-
-@item peak
-select peak gain, very conservative approach. This is default value.
-
-@item dc
-select DC gain, limited application.
-
-@item gn
-select gain to noise approach, this is most popular one.
-
-@item ac
-select AC gain.
-
-@item rms
-select RMS gain.
-@end table
+@item irlink
+For multichannel IR if this option is set to @var{true}, all IR channels will be
+normalized with maximal measured gain of all IR channels coefficients as set by @code{irnorm} option.
+When disabled, all IR coefficients in each IR channel will be normalized independently.
+Default is @var{true}.
 
 @item irgain
 Set gain to be applied to IR coefficients before filtering.
-Allowed range is 0 to 1. This gain is applied after any gain applied with @var{gtype} option.
+Allowed range is 0 to 1. This gain is applied after any gain applied with @var{irnorm} option.
 
 @item irfmt
 Set format of IR stream. Can be @code{mono} or @code{input}.
@@ -1835,18 +1875,16 @@ Set max allowed Impulse Response filter duration in seconds. Default is 30 secon
 Allowed range is 0.1 to 60 seconds.
 
 @item response
-Show IR frequency response, magnitude(magenta), phase(green) and group delay(yellow) in additional video stream.
-By default it is disabled.
+This option is deprecated, and does nothing.
 
 @item channel
-Set for which IR channel to display frequency response. By default is first channel
-displayed. This option is used only when @var{response} is enabled.
+This option is deprecated, and does nothing.
 
 @item size
-Set video stream size. This option is used only when @var{response} is enabled.
+This option is deprecated, and does nothing.
 
 @item rate
-Set video stream frame rate. This option is used only when @var{response} is enabled.
+This option is deprecated, and does nothing.
 
 @item minp
 Set minimal partition size used for convolution. Default is @var{8192}.
@@ -1901,9 +1939,15 @@ ffmpeg -i input.wav -i middle_tunnel_1way_mono.wav -lavfi afir output.wav
 
 @item
 Apply true stereo processing given input stereo stream, and two stereo impulse responses for left and right channel,
-the impulse response files are files with names l_ir.wav and r_ir.wav:
+the impulse response files are files with names l_ir.wav and r_ir.wav, and setting irnorm option value:
 @example
-"pan=4C|c0=FL|c1=FL|c2=FR|c3=FR[a];amovie=l_ir.wav[LIR];amovie=r_ir.wav[RIR];[LIR][RIR]amerge[ir];[a][ir]afir=irfmt=input:gtype=gn:irgain=-5dB,pan=stereo|FL<c0+c2|FR<c1+c3"
+"pan=4C|c0=FL|c1=FL|c2=FR|c3=FR[a];amovie=l_ir.wav[LIR];amovie=r_ir.wav[RIR];[LIR][RIR]amerge[ir];[a][ir]afir=irfmt=input:irnorm=1.2,pan=stereo|FL<c0+c2|FR<c1+c3"
+@end example
+
+@item
+Similar to above example, but with @code{irgain} explicitly set to estimated value and with @code{irnorm} disabled:
+@example
+"pan=4C|c0=FL|c1=FL|c2=FR|c3=FR[a];amovie=l_ir.wav[LIR];amovie=r_ir.wav[RIR];[LIR][RIR]amerge[ir];[a][ir]afir=irfmt=input:irgain=-5dB:irnom=-1,pan=stereo|FL<c0+c2|FR<c1+c3"
 @end example
 @end itemize
 
@@ -2319,7 +2363,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -2696,6 +2740,20 @@ Pass error signal estimated samples.
 
 Default value is @var{o}.
 @end table
+
+@item precision
+Set which precision to use when processing samples.
+
+@table @option
+@item auto
+Auto pick internal sample format depending on other filters.
+
+@item float
+Always use single-floating point precision sample format.
+
+@item double
+Always use double-floating point precision sample format.
+@end table
 @end table
 
 @subsection Examples
@@ -3035,6 +3093,20 @@ Pass difference between input, 1st input and error signal estimate.
 Pass error signal estimated samples.
 
 Default value is @var{o}.
+@end table
+
+@item precision
+Set which precision to use when processing samples.
+
+@table @option
+@item auto
+Auto pick internal sample format depending on other filters.
+
+@item float
+Always use single-floating point precision sample format.
+
+@item double
+Always use double-floating point precision sample format.
 @end table
 @end table
 
@@ -3691,7 +3763,7 @@ Set order of tilt filter.
 
 @item level
 Set input volume level. Allowed range is from 0 to 4.
-Defalt is 1.
+Default is 1.
 @end table
 
 @subsection Commands
@@ -3859,7 +3931,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -3956,7 +4028,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -4063,7 +4135,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -4155,7 +4227,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -4219,14 +4291,18 @@ It accepts the following parameters:
 @item map
 Map channels from input to output. The argument is a '|'-separated list of
 mappings, each in the @code{@var{in_channel}-@var{out_channel}} or
-@var{in_channel} form. @var{in_channel} can be either the name of the input
-channel (e.g. FL for front left) or its index in the input channel layout.
-@var{out_channel} is the name of the output channel or its index in the output
-channel layout. If @var{out_channel} is not given then it is implicitly an
-index, starting with zero and increasing by one for each mapping.
+@code{@var{in_channel}} form. @var{in_channel} can be either the name of the
+input channel (e.g. FL for front left) or its index in the input channel
+layout. @var{out_channel} is the name of the output channel or its index in the
+output channel layout. If @var{out_channel} is not given then it is implicitly
+an index, starting with zero and increasing by one for each mapping. Mixing
+different types of mappings is not allowed and will result in a parse error.
 
 @item channel_layout
-The channel layout of the output stream.
+The channel layout of the output stream. If not specified, then filter will
+guess it based on the @var{out_channel} names or the number of mappings.
+Guessed layouts will not necessarily contain channels in the order of the
+mappings.
 @end table
 
 If no mapping is present, the filter will implicitly map input channels to
@@ -4596,7 +4672,7 @@ This filter supports the all above options as @ref{commands}.
 @section crystalizer
 Simple algorithm for audio noise sharpening.
 
-This filter linearly increases differences betweeen each audio sample.
+This filter linearly increases differences between each audio sample.
 
 The filter accepts the following options:
 
@@ -4991,7 +5067,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -5502,7 +5578,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -5862,7 +5938,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -7219,7 +7295,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -7309,7 +7385,7 @@ Set transform type of IIR filter.
 @end table
 
 @item precision, r
-Set precison of filtering.
+Set precision of filtering.
 @table @option
 @item auto
 Pick automatic sample format depending on surround filters.
@@ -7778,7 +7854,7 @@ Set the sample rate, default is 44100.
 Set the number of samples per each frame. Default is 1024.
 
 @item taps, t
-Set the number of filter coefficents in output audio stream.
+Set the number of filter coefficients in output audio stream.
 Default value is 0.
 
 @item channel_layout, c
@@ -7834,7 +7910,7 @@ Bands are separated by white spaces and each band represent frequency in Hz.
 Default is @code{25 40 63 100 160 250 400 630 1000 1600 2500 4000 6300 10000 16000 24000}.
 
 @item taps, t
-Set number of filter coefficents in output audio stream.
+Set number of filter coefficients in output audio stream.
 Default value is @code{4096}.
 
 @item sample_rate, r
@@ -7861,7 +7937,7 @@ The filter accepts the following options:
 
 @table @option
 @item taps, t
-Set number of filter coefficents in output audio stream.
+Set number of filter coefficients in output audio stream.
 Default value is 1025.
 
 @item frequency, f
@@ -10425,7 +10501,7 @@ and from 1 to 49 odd number of signed integers in @var{row} mode.
 @item 2rdiv
 @item 3rdiv
 Set multiplier for calculated value for each plane.
-If unset or 0, it will be sum of all matrix elements.
+If unset or 0, it will be 1/sum of all matrix elements.
 
 @item 0bias
 @item 1bias
@@ -11016,8 +11092,8 @@ By default, a component curve is defined by the two points @var{(0;0)} and
 "adjusted" to its own value, which means no change to the image.
 
 The filter allows you to redefine these two points and add some more. A new
-curve will be define to pass smoothly through all these new coordinates. The
-new defined points needs to be strictly increasing over the x-axis, and their
+curve will be defined to pass smoothly through all these new coordinates. The
+new defined points need to be strictly increasing over the x-axis, and their
 @var{x} and @var{y} values must be in the @var{[0;1]} interval. The curve is
 formed by using a natural or monotonic cubic spline interpolation, depending
 on the @var{interp} option (default: @code{natural}). The @code{natural}
@@ -11997,11 +12073,21 @@ need to build and install the OpenVINO for C library (see
 @code{--enable-libopenvino} (--extra-cflags=-I... --extra-ldflags=-L... might
 be needed if the header files and libraries are not installed into system path)
 
+@item torch
+Libtorch backend. To enable this backend you need to build and install Libtroch
+for C++ library. Please download cxx11 ABI version (see
+@url{https://pytorch.org/get-started/locally})
+and configure FFmpeg with @code{--enable-libtorch
+--extra-cflags=-I/libtorch_root/libtorch/include
+--extra-cflags=-I/libtorch_root/libtorch/include/torch/csrc/api/include
+--extra-ldflags=-L/libtorch_root/libtorch/lib/}
+
 @end table
 
 @item model
 Set path to model file specifying network architecture and its parameters.
-Note that different backends use different file formats. TensorFlow, OpenVINO backend can load files for only its format.
+Note that different backends use different file formats. TensorFlow, OpenVINO
+and Libtorch backend can load files for only its format.
 
 @item input
 Set the input name of the dnn network.
@@ -12908,7 +12994,7 @@ drawtext="fontfile=FreeSerif.ttf:fontcolor=white:x=100:y=x/dar:enable=lt(mod(t\,
 @item
 Use fontconfig to set the font. Note that the colons need to be escaped.
 @example
-drawtext='fontfile=Linux Libertine O-40\:style=Semibold:text=FFmpeg'
+drawtext='fontfile=Linux Libertine O-40\\:style=Semibold:text=FFmpeg'
 @end example
 
 @item
@@ -13498,6 +13584,12 @@ Draw black box on top left part of video frame of size 100x100 with drawbox filt
 @example
 [in][blurin]feedback=x=0:y=0:w=100:h=100[out][blurout];[blurout]drawbox=x=0:y=0:w=100:h=100:t=100[blurin]
 @end example
+
+@item
+Pixelize rectangular part of video frame of size 100x100 with pixelize filter.
+@example
+[in][blurin]feedback=x=320:y=240:w=100:h=100[out][blurout];[blurout]pixelize[blurin]
+@end example
 @end itemize
 
 @section fftdnoiz
@@ -14044,15 +14136,6 @@ For example:
 ffmpeg -i in.vob -vf "fieldorder=bff" out.dv
 @end example
 
-@section fifo, afifo
-
-Buffer input images and send them when they are requested.
-
-It is mainly useful when auto-inserted by the libavfilter
-framework.
-
-It does not take parameters.
-
 @section fillborders
 
 Fill borders of the input video, without changing video stream dimensions.
@@ -14240,6 +14323,14 @@ It accepts the following parameters:
 @item pix_fmts
 A '|'-separated list of pixel format names, such as
 "pix_fmts=yuv420p|monow|rgb24".
+
+@item color_spaces
+A '|'-separated list of color space names, such as
+"color_spaces=bt709|bt470bg|bt2020nc".
+
+@item color_ranges
+A '|'-separated list of color range names, such as
+"color_spaces=tv|pc".
 
 @end table
 
@@ -14598,6 +14689,47 @@ option may cause flicker since the B-Frames have often larger QP. Default is
 @code{0} (not enabled).
 
 @end table
+
+@anchor{fsync}
+@section fsync
+
+Synchronize video frames with an external mapping from a file.
+
+For each input PTS given in the map file it either drops or creates as many
+frames as necessary to recreate the sequence of output frames given in the
+map file.
+
+This filter is useful to recreate the output frames of a framerate conversion
+by the @ref{fps} filter, recorded into a map file using the ffmpeg option
+@code{-stats_mux_pre}, and do further processing to the corresponding frames
+e.g. quality comparison.
+
+Each line of the map file must contain three items per input frame, the input
+PTS (decimal), the output PTS (decimal) and the
+output TIMEBASE (decimal/decimal), seperated by a space.
+This file format corresponds to the output
+of @code{-stats_mux_pre_fmt="@{ptsi@} @{pts@} @{tb@}"}.
+
+The filter assumes the map file is sorted by increasing input PTS.
+
+The filter accepts the following options:
+@table @option
+
+@item file, f
+The filename of the map file to be used.
+@end table
+
+Example:
+@example
+# Convert a video to 25 fps and record a MAP_FILE file with the default format of this filter
+ffmpeg -i INPUT -vf fps=fps=25 -stats_mux_pre MAP_FILE -stats_mux_pre_fmt "@{ptsi@} @{pts@} @{tb@}" OUTPUT
+
+# Sort MAP_FILE by increasing input PTS
+sort -n MAP_FILE
+
+# Use INPUT, OUTPUT and the MAP_FILE from above to compare the corresponding frames in INPUT and OUTPUT via SSIM
+ffmpeg -i INPUT -i OUTPUT -filter_complex '[0:v]fsync=file=MAP_FILE[ref];[1:v][ref]ssim' -f null -
+@end example
 
 @section gblur
 
@@ -15837,6 +15969,15 @@ further computations. This allows inserting the idet filter as a low computation
 method to clean up the interlaced flag
 @end table
 
+@subsection Examples
+
+Inspect the field order of the first 360 frames in a video, in verbose detail:
+@example
+ffmpeg -i INPUT -filter:v idet,metadata=mode=print -frames:v 360 -an -f null -
+@end example
+The idet filter will add analysis metadata to each frame, which will then be
+discarded. At the end, the filter will also print a final report with statistics.
+
 @section il
 
 Deinterleave or interleave fields.
@@ -16840,7 +16981,7 @@ ffmpeg -init_hw_device vulkan -hwaccel vaapi -hwaccel_output_format vaapi ... -v
 @anchor{libvmaf}
 @section libvmaf
 
-Calulate the VMAF (Video Multi-Method Assessment Fusion) score for a
+Calculate the VMAF (Video Multi-Method Assessment Fusion) score for a
 reference/distorted pair of input videos.
 
 The first input is the distorted video, and the second input is the reference video.
@@ -16866,6 +17007,10 @@ Set the file path to be used to store log files.
 
 @item log_fmt
 Set the format of the log file (xml, json, csv, or sub).
+
+@item pool
+Set the pool method to be used for computing vmaf.
+Options are @code{min}, @code{harmonic_mean} or @code{mean} (default).
 
 @item n_threads
 Set number of threads to be used when initializing libvmaf.
@@ -16896,7 +17041,7 @@ ffmpeg -i distorted.mpg -i reference.mpg -lavfi libvmaf='model=version=vmaf_v0.6
 @end example
 
 @item
-Example with multiple addtional features:
+Example with multiple additional features:
 @example
 ffmpeg -i distorted.mpg -i reference.mpg -lavfi libvmaf='feature=name=psnr|name=ciede' -f null -
 @end example
@@ -16926,8 +17071,8 @@ ffmpeg \
     -hwaccel cuda -hwaccel_output_format cuda -codec:v av1_cuvid -i dis.obu \
     -hwaccel cuda -hwaccel_output_format cuda -codec:v av1_cuvid -i ref.obu \
     -filter_complex "
-        [0:v]scale_cuda=format=yuv420p[ref]; \
-        [1:v]scale_cuda=format=yuv420p[dis]; \
+        [0:v]scale_cuda=format=yuv420p[dis]; \
+        [1:v]scale_cuda=format=yuv420p[ref]; \
         [dis][ref]libvmaf_cuda=log_fmt=json:log_path=output.json
     " \
     -f null -
@@ -17145,6 +17290,9 @@ The command accepts the same syntax of the corresponding option.
 If the specified expression is not valid, it is kept at its current
 value.
 
+@anchor{lutrgb}
+@anchor{lutyuv}
+@anchor{lut}
 @section lut, lutrgb, lutyuv
 
 Compute a look-up table for binding each pixel component input value
@@ -17801,7 +17949,7 @@ Macroblock size. Default @code{16}.
 Motion estimation search parameter. Default @code{32}.
 
 @item vsbmc
-Enable variable-size block motion compensation. Motion estimation is applied with smaller block sizes at object boundaries in order to make the them less blur. Default is @code{0} (disabled).
+Enable variable-size block motion compensation. Motion estimation is applied with smaller block sizes at object boundaries in order to make them less blurry. Default is @code{0} (disabled).
 @end table
 @end table
 
@@ -19796,6 +19944,7 @@ pseudocolor="'if(between(val,ymax,amax),lerp(ymin,ymax,(val-ymax)/(amax-ymax)),-
 @end example
 @end itemize
 
+@anchor{psnr}
 @section psnr
 
 Obtain the average, maximum and minimum PSNR (Peak Signal to Noise
@@ -20001,6 +20150,330 @@ Some equation like:
 qp=2+2*sin(PI*qp)
 @end example
 @end itemize
+
+@section qrencode
+Generate a QR code using the libqrencode library (see
+@url{https://fukuchi.org/works/qrencode/}), and overlay it on top of the current
+frame.
+
+To enable the compilation of this filter, you need to configure FFmpeg with
+@code{--enable-libqrencode}.
+
+The QR code is generated from the provided text or text pattern. The
+corresponding QR code is scaled and overlayed into the video output according to
+the specified options.
+
+In case no text is specified, no QR code is overlaied.
+
+This filter accepts the following options:
+
+@table @option
+
+@item qrcode_width, q
+@item padded_qrcode_width, Q
+Specify an expression for the width of the rendered QR code, with and without
+padding. The @var{qrcode_width} expression can reference the value set by the
+@var{padded_qrcode_width} expression, and vice versa.
+By default @var{padded_qrcode_width} is set to @var{qrcode_width}, meaning that
+there is no padding.
+
+These expressions are evaluated for each new frame.
+
+See the @ref{qrencode_expressions,,qrencode Expressions} section for details.
+
+@item x
+@item y
+Specify an expression for positioning the padded QR code top-left corner.  The
+@var{x} expression can reference the value set by the @var{y} expression, and
+vice.
+
+By default @var{x} and @var{y} are set set to @var{0}, meaning that the QR code
+is placed in the top left corner of the input.
+
+These expressions are evaluated for each new frame.
+
+See the @ref{qrencode_expressions,,qrencode Expressions} section for details.
+
+@item case_sensitive, cs
+Instruct libqrencode to use case sensitive encoding. This is enabled by
+default. This can be disabled to reduce the QR encoding size.
+
+@item level, l
+Specify the QR encoding error correction level. With an higher correction level,
+the encoding size will increase but the code will be more robust to corruption.
+Lower level is @var{L}.
+
+It accepts the following values:
+@table @samp
+@item L
+@item M
+@item Q
+@item H
+@end table
+
+@item expansion
+Select how the input text is expanded. Can be either @code{none}, or
+@code{normal} (default). See the @ref{qrencode_text_expansion,,qrencode Text expansion}
+section below for details.
+
+@item text
+@item textfile
+Define the text to be rendered. In case neither is specified, no QR is encoded
+(just an empty colored frame).
+
+In case expansion is enabled, the text is treated as a text template, using the
+qrencode expansion mechanism. See the @ref{qrencode_text_expansion,,qrencode
+Text expansion} section below for details.
+
+@item background_color, bc
+@item foreground_color, fc
+Set the QR code and background color. The default value of
+@var{foreground_color} is "black", the default value of @var{background_color}
+is "white".
+
+For the syntax of the color options, check the @ref{color syntax,,"Color"
+section in the ffmpeg-utils manual,ffmpeg-utils}.
+@end table
+
+@anchor{qrencode_expressions}
+@subsection qrencode Expressions
+
+The expressions set by the options contain the following constants and functions.
+
+@table @option
+@item dar
+input display aspect ratio, it is the same as (@var{w} / @var{h}) * @var{sar}
+
+@item duration
+the current frame's duration, in seconds
+
+@item hsub
+@item vsub
+horizontal and vertical chroma subsample values. For example for the
+pixel format "yuv422p" @var{hsub} is 2 and @var{vsub} is 1.
+
+@item main_h, H
+the input height
+
+@item main_w, W
+the input width
+
+@item n
+the number of input frame, starting from 0
+
+@item pict_type
+a number representing the picture type
+
+@item qr_w, w
+the width of the encoded QR code
+
+@item rendered_qr_w, q
+@item rendered_padded_qr_w, Q
+the width of the rendered QR code, without and without padding.
+
+These parameters allow the @var{q} and @var{Q} expressions to refer to each
+other, so you can for example specify @code{q=3/4*Q}.
+
+@item rand(min, max)
+return a random number included between @var{min} and @var{max}
+
+@item sar
+the input sample aspect ratio
+
+@item t
+timestamp expressed in seconds, NAN if the input timestamp is unknown
+
+@item x
+@item y
+the x and y offset coordinates where the text is drawn.
+
+These parameters allow the @var{x} and @var{y} expressions to refer to each
+other, so you can for example specify @code{y=x/dar}.
+@end table
+
+@anchor{qrencode_text_expansion}
+@subsection qrencode Text expansion
+
+If @option{expansion} is set to @code{none}, the text is printed verbatim.
+
+If @option{expansion} is set to @code{normal} (which is the default),
+the following expansion mechanism is used.
+
+The backslash character @samp{\}, followed by any character, always expands to
+the second character.
+
+Sequences of the form @code{%@{...@}} are expanded. The text between the
+braces is a function name, possibly followed by arguments separated by ':'.
+If the arguments contain special characters or delimiters (':' or '@}'),
+they should be escaped.
+
+Note that they probably must also be escaped as the value for the @option{text}
+option in the filter argument string and as the filter argument in the
+filtergraph description, and possibly also for the shell, that makes up to four
+levels of escaping; using a text file with the @option{textfile} option avoids
+these problems.
+
+The following functions are available:
+
+@table @command
+@item n, frame_num
+return the frame number
+
+@item pts
+Return the presentation timestamp of the current frame.
+
+It can take up to two arguments.
+
+The first argument is the format of the timestamp; it defaults to @code{flt} for
+seconds as a decimal number with microsecond accuracy; @code{hms} stands for a
+formatted @var{[-]HH:MM:SS.mmm} timestamp with millisecond accuracy.
+@code{gmtime} stands for the timestamp of the frame formatted as UTC time;
+@code{localtime} stands for the timestamp of the frame formatted as local time
+zone time. If the format is set to @code{hms24hh}, the time is formatted in 24h
+format (00-23).
+
+The second argument is an offset added to the timestamp.
+
+If the format is set to @code{localtime} or @code{gmtime}, a third argument may
+be supplied: a @code{strftime} C function format string. By default,
+@var{YYYY-MM-DD HH:MM:SS} format will be used.
+
+@item expr, e
+Evaluate the expression's value and output as a double.
+
+It must take one argument specifying the expression to be evaluated, accepting
+the constants and functions defined in @ref{qrencode_expressions}.
+
+@item expr_formatted, ef
+Evaluate the expression's value and output as a formatted string.
+
+The first argument is the expression to be evaluated, just as for the @var{expr} function.
+The second argument specifies the output format. Allowed values are @samp{x},
+@samp{X}, @samp{d} and @samp{u}. They are treated exactly as in the
+@code{printf} function.
+The third parameter is optional and sets the number of positions taken by the output.
+It can be used to add padding with zeros from the left.
+
+@item gmtime
+The time at which the filter is running, expressed in UTC.
+It can accept an argument: a @code{strftime} C function format string.
+The format string is extended to support the variable @var{%[1-6]N}
+which prints fractions of the second with optionally specified number of digits.
+
+@item localtime
+The time at which the filter is running, expressed in the local time zone.
+It can accept an argument: a @code{strftime} C function format string.
+The format string is extended to support the variable @var{%[1-6]N}
+which prints fractions of the second with optionally specified number of digits.
+
+@item metadata
+Frame metadata. Takes one or two arguments.
+
+The first argument is mandatory and specifies the metadata key.
+
+The second argument is optional and specifies a default value, used when the
+metadata key is not found or empty.
+
+Available metadata can be identified by inspecting entries starting with TAG
+included within each frame section printed by running @code{ffprobe
+-show_frames}.
+
+String metadata generated in filters leading to the qrencode filter are also
+available.
+
+@item rand(min, max)
+return a random number included between @var{min} and @var{max}
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+Generate a QR code encoding the specified text with the default size, overalaid
+in the top left corner of the input video, with the default size:
+@example
+qrencode=text=www.ffmpeg.org
+@end example
+
+@item
+Same as below, but select blue on pink colors:
+@example
+qrencode=text=www.ffmpeg.org:bc=pink@@0.5:fc=blue
+@end example
+
+@item
+Place the QR code in the bottom right corner of the input video:
+@example
+qrencode=text=www.ffmpeg.org:x=W-Q:y=H-Q
+@end example
+
+@item
+Generate a QR code with width of 200 pixels and padding, making the padded width
+4/3 of the QR code width:
+@example
+qrencode=text=www.ffmpeg.org:q=200:Q=4/3*q
+@end example
+
+@item
+Generate a QR code with padded width of 200 pixels and padding, making the QR
+code width 3/4 of the padded width:
+@example
+qrencode=text=www.ffmpeg.org:Q=200:q=3/4*Q
+@end example
+
+@item
+Make the QR code a fraction of the input video width:
+@example
+qrencode=text=www.ffmpeg.org:q=W/5
+@end example
+
+@item
+Generate a QR code encoding the frame number:
+@example
+qrencode=text=%@{n@}
+@end example
+
+@item
+Generate a QR code encoding the GMT timestamp:
+@example
+qrencode=text=%@{gmtime@}
+@end example
+
+@item
+Generate a QR code encoding the timestamp expressed as a float:
+@example
+qrencode=text=%@{pts@}
+@end example
+
+@end itemize
+
+@section quirc
+
+Identify and decode a QR code using the libquirc library (see
+@url{https://github.com/dlbeer/quirc/}), and print the identified QR codes
+positions and payload as metadata.
+
+To enable the compilation of this filter, you need to configure FFmpeg with
+@code{--enable-libquirc}.
+
+For each found QR code in the input video, some metadata entries are added with
+the prefix @var{lavfi.quirc.N}, where @var{N} is the index, starting from 0,
+associated to the QR code.
+
+A description of each metadata value follows:
+
+@table @option
+@item lavfi.quirc.count
+the number of found QR codes, it is not set in case none was found
+
+@item lavfi.quirc.N.corner.M.x
+@item lavfi.quirc.N.coreer.M.y
+the x/y positions of the four corners of the square containing the QR code,
+where @var{M} is the index of the corner starting from 0
+
+@item lavfi.quirc.N.payload
+the payload of the QR code
+@end table
 
 @section random
 
@@ -20520,8 +20993,8 @@ the next filter, the scale filter will convert the input to the
 requested format.
 
 @subsection Options
-The filter accepts the following options, or any of the options
-supported by the libswscale scaler.
+The filter accepts the following options, any of the options supported
+by the libswscale scaler, as well as any of the @ref{framesync} options.
 
 See @ref{scaler_options,,the ffmpeg-scaler manual,ffmpeg-scaler} for
 the complete list of scaler options.
@@ -20665,6 +21138,21 @@ Set full range (0-255 in case of 8-bit luma).
 Set "MPEG" range (16-235 in case of 8-bit luma).
 @end table
 
+@item in_chroma_loc
+@item out_chroma_loc
+Set in/output chroma sample location. If not specified, center-sited chroma
+is used by default. Possible values:
+
+@table @samp
+@item auto, unknown
+@item left
+@item center
+@item topleft
+@item top
+@item bottomleft
+@item bottom
+@end table
+
 @item force_original_aspect_ratio
 Enable decreasing or increasing output video width or height if necessary to
 keep the original aspect ratio. Possible values:
@@ -20759,6 +21247,16 @@ The position (byte offset) of the frame in the input stream, or NaN if
 this information is unavailable and/or meaningless (for example in case of synthetic video).
 Only available with @code{eval=frame}.
 Deprecated, do not use.
+
+@item ref_w, rw
+@item ref_h, rh
+@item ref_a
+@item ref_dar, rdar
+@item ref_n
+@item ref_t
+@item ref_pos
+Eqvuialent to the above, but for a second reference input. If any of these
+variables are present, this filter accepts two inputs.
 @end table
 
 @subsection Examples
@@ -20860,6 +21358,20 @@ making sure the resulting resolution is even (required by some codecs):
 @example
 scale='trunc(ih*dar/2)*2:trunc(ih/2)*2',setsar=1/1
 @end example
+
+@item
+Scale a subtitle stream (sub) to match the main video (main) in size before
+overlaying. ("scale2ref")
+@example
+'[main]split[a][b]; [ref][a]scale=rw:rh[c]; [b][c]overlay'
+@end example
+
+@item
+Scale a logo to 1/10th the height of a video, while preserving its display
+aspect ratio.
+@example
+[logo-in][video-in]scale=w=oh*dar:h=rh/10[logo-out]
+@end example
 @end itemize
 
 @subsection Commands
@@ -20918,7 +21430,7 @@ pixel format is used.
 The filter does not support converting between YUV and RGB pixel formats.
 
 @item passthrough
-If set to 0, every frame is processed, even if no conversion is neccesary.
+If set to 0, every frame is processed, even if no conversion is necessary.
 This mode can be useful to use the filter as a buffer for a downstream
 frame-consumer that exhausts the limited decoder frame pool.
 
@@ -21093,79 +21605,6 @@ The position (byte offset) of the frame in the input stream, or NaN if
 this information is unavailable and/or meaningless (for example in case of synthetic video).
 Only available with @code{eval=frame}.
 Deprecated, do not use.
-@end table
-
-@section scale2ref
-
-Scale (resize) the input video, based on a reference video.
-
-See the scale filter for available options, scale2ref supports the same but
-uses the reference video instead of the main input as basis. scale2ref also
-supports the following additional constants for the @option{w} and
-@option{h} options:
-
-@table @var
-@item main_w
-@item main_h
-The main input video's width and height
-
-@item main_a
-The same as @var{main_w} / @var{main_h}
-
-@item main_sar
-The main input video's sample aspect ratio
-
-@item main_dar, mdar
-The main input video's display aspect ratio. Calculated from
-@code{(main_w / main_h) * main_sar}.
-
-@item main_hsub
-@item main_vsub
-The main input video's horizontal and vertical chroma subsample values.
-For example for the pixel format "yuv422p" @var{hsub} is 2 and @var{vsub}
-is 1.
-
-@item main_n
-The (sequential) number of the main input frame, starting from 0.
-Only available with @code{eval=frame}.
-
-@item main_t
-The presentation timestamp of the main input frame, expressed as a number of
-seconds. Only available with @code{eval=frame}.
-
-@item main_pos
-The position (byte offset) of the frame in the main input stream, or NaN if
-this information is unavailable and/or meaningless (for example in case of synthetic video).
-Only available with @code{eval=frame}.
-@end table
-
-@subsection Examples
-
-@itemize
-@item
-Scale a subtitle stream (b) to match the main video (a) in size before overlaying
-@example
-'scale2ref[b][a];[a][b]overlay'
-@end example
-
-@item
-Scale a logo to 1/10th the height of a video, while preserving its display aspect ratio.
-@example
-[logo-in][video-in]scale2ref=w=oh*mdar:h=ih/10[logo-out][video-out]
-@end example
-@end itemize
-
-@subsection Commands
-
-This filter supports the following commands:
-@table @option
-@item width, w
-@item height, h
-Set the output video dimension expression.
-The command accepts the same syntax of the corresponding option.
-
-If the specified expression is not valid, it is kept at its current
-value.
 @end table
 
 @section scale2ref_npp
@@ -21650,6 +22089,23 @@ Keep the same colorspace property (default).
 @item chroma-derived-c
 @item ictcp
 @end table
+
+@item chroma_location
+Set the chroma sample location.
+Available values are:
+
+@table @samp
+@item auto
+Keep the same chroma location (default).
+
+@item unspecified, unknown
+@item left
+@item center
+@item topleft
+@item top
+@item bottomleft
+@item bottom
+@end table
 @end table
 
 @section sharpen_npp
@@ -21710,6 +22166,10 @@ This filter supports the following options:
 @table @option
 @item checksum
 Calculate checksums of each plane. By default enabled.
+
+@item udu_sei_as_ascii
+Try to print user data unregistered SEI as ascii character when possible,
+in hex format otherwise.
 @end table
 
 The shown line contains a sequence of key/value pairs of the form
@@ -22229,9 +22689,27 @@ whether a pixel should be blurred or not. The option value must be an
 integer in the range [-30,30]. A value of 0 will filter all the image,
 a value included in [0,30] will filter flat areas and a value included
 in [-30,0] will filter edges. Default value is @option{luma_threshold}.
+
+@item alpha_radius, ar
+Set the alpha radius. The option value must be a float number in
+the range [0.1,5.0] that specifies the variance of the gaussian filter
+used to blur the image (slower if larger). Default value is @option{luma_radius}.
+
+@item alpha_strength, as
+Set the alpha strength. The option value must be a float number
+in the range [-1.0,1.0] that configures the blurring. A value included
+in [0.0,1.0] will blur the image whereas a value included in
+[-1.0,0.0] will sharpen the image. Default value is @option{luma_strength}.
+
+@item alpha_threshold, at
+Set the alpha threshold used as a coefficient to determine
+whether a pixel should be blurred or not. The option value must be an
+integer in the range [-30,30]. A value of 0 will filter all the image,
+a value included in [0,30] will filter flat areas and a value included
+in [-30,0] will filter edges. Default value is @option{luma_threshold}.
 @end table
 
-If a chroma option is not explicitly set, the corresponding luma value
+If a chroma or alpha option is not explicitly set, the corresponding luma value
 is set.
 
 @section sobel
@@ -23048,7 +23526,7 @@ The filter accepts the following options:
 @table @option
 
 @item layout
-Set the grid size in the form @code{COLUMNSxROWS}. Range is upto UINT_MAX cells.
+Set the grid size in the form @code{COLUMNSxROWS}. Range is up to UINT_MAX cells.
 Default is @code{6x5}.
 
 @item nb_frames
@@ -23099,6 +23577,70 @@ mixed flat and named options:
 tile=3x2:nb_frames=5:padding=7:margin=2
 @end example
 @end itemize
+
+@section tiltandshift
+Apply tilt-and-shift effect.
+
+What happens when you invert time and space?
+
+Normally a video is composed of several frames that represent a different
+instant of time and shows a scene that evolves in the space captured by the
+frame. This filter is the antipode of that concept, taking inspiration from
+tilt and shift photography.
+
+A filtered frame contains the whole timeline of events composing the sequence,
+and this is obtained by placing a slice of pixels from each frame into a single
+one. However, since there are no infinite-width frames, this is done up the
+width of the input frame, and a video is recomposed by shifting away one
+column for each subsequent frame. In order to map space to time, the filter
+tilts each input frame as well, so that motion is preserved. This is accomplished
+by progressively selecting a different column from each input frame.
+
+The end result is a sort of inverted parallax, so that far away objects move
+much faster that the ones in the front. The ideal conditions for this video
+effect are when there is either very little motion and the backgroud is static,
+or when there is a lot of motion and a very wide depth of field (e.g. wide
+panorama, while moving on a train).
+
+The filter accepts the following parameters:
+
+@table @option
+
+@item tilt
+Tilt video while shifting (default). When unset, video will be sliding a
+static image, composed of the first column of each frame.
+
+@item start
+What to do at the start of filtering (see below).
+
+@item end
+What to do at the end of filtering (see below).
+
+@item hold
+How many columns should pass through before start of filtering.
+
+@item pad
+How many columns should be inserted before end of filtering.
+
+@end table
+
+Normally the filter shifts and tilts from the very first frame, and stops when
+the last one is received. However, before filtering starts, normal video may
+be preseved, so that the effect is slowly shifted in its place. Similarly,
+the last video frame may be reconstructed at the end. Alternatively it is
+possible to just start and end with black.
+
+@table @samp
+@item none
+Filtering starts immediately and ends when the last frame is received.
+
+@item frame
+The first frames or the very last frame are kept intact during processing.
+
+@item black
+Black is padded at the beginning or at the end of filtering.
+
+@end table
 
 @section tinterlace
 
@@ -23922,7 +24464,7 @@ The way this differs from the behavior of spp is that uspp actually encodes &
 decodes each case with libavcodec Snow, whereas spp uses a simplified intra only 8x8
 DCT similar to MJPEG.
 
-This filter is only available in ffmpeg version 4.4 or earlier.
+This filter is not available in ffmpeg versions between 5.0 and 6.0.
 
 The filter accepts the following options:
 
@@ -25522,6 +26064,73 @@ minimum values, and @code{1} maximum values.
 @subsection Commands
 
 This filter supports all above options as @ref{commands}, excluding option @code{inputs}.
+
+@anchor{xpsnr}
+@section xpsnr
+
+Obtain the average (across all input frames) and minimum (across all color plane averages)
+eXtended Perceptually weighted peak Signal-to-Noise Ratio (XPSNR) between two input videos.
+
+The XPSNR is a low-complexity psychovisually motivated distortion measurement algorithm for
+assessing the difference between two video streams or images. This is especially useful for
+objectively quantifying the distortions caused by video and image codecs, as an alternative
+to a formal subjective test. The logarithmic XPSNR output values are in a similar range as
+those of traditional @ref{psnr} assessments but better reflect human impressions of visual
+coding quality. More details on the XPSNR measure, which essentially represents a blockwise
+weighted variant of the PSNR measure, can be found in the following freely available papers:
+
+@itemize
+@item
+C. R. Helmrich, M. Siekmann, S. Becker, S. Bosse, D. Marpe, and T. Wiegand, "XPSNR: A
+Low-Complexity Extension of the Perceptually Weighted Peak Signal-to-Noise Ratio for
+High-Resolution Video Quality Assessment," in Proc. IEEE Int. Conf. Acoustics, Speech,
+Sig. Process. (ICASSP), virt./online, May 2020. @url{www.ecodis.de/xpsnr.htm}
+
+@item
+C. R. Helmrich, S. Bosse, H. Schwarz, D. Marpe, and T. Wiegand, "A Study of the
+Extended Perceptually Weighted Peak Signal-to-Noise Ratio (XPSNR) for Video Compression
+with Different Resolutions and Bit Depths," ITU Journal: ICT Discoveries, vol. 3, no.
+1, pp. 65 - 72, May 2020. @url{http://handle.itu.int/11.1002/pub/8153d78b-en}
+@end itemize
+
+When publishing the results of XPSNR assessments obtained using, e.g., this FFmpeg filter, a
+reference to the above papers as a means of documentation is strongly encouraged. The filter
+requires two input videos. The first input is considered a (usually not distorted) reference
+source and is passed unchanged to the output, whereas the second input is a (distorted) test
+signal. Except for the bit depth, these two video inputs must have the same pixel format. In
+addition, for best performance, both compared input videos should be in YCbCr color format.
+
+The obtained overall XPSNR values mentioned above are printed through the logging system. In
+case of input with multiple color planes, we suggest reporting of the minimum XPSNR average.
+
+The following parameter, which behaves like the one for the @ref{psnr} filter, is accepted:
+
+@table @option
+@item stats_file, f
+If specified, the filter will use the named file to save the XPSNR value of each individual
+frame and color plane. When the file name equals "-", that data is sent to standard output.
+@end table
+
+This filter also supports the @ref{framesync} options.
+
+@subsection Examples
+@itemize
+@item
+XPSNR analysis of two 1080p HD videos, ref_source.yuv and test_video.yuv, both at 24 frames
+per second, with color format 4:2:0, bit depth 8, and output of a logfile named "xpsnr.log":
+@example
+ffmpeg -s 1920x1080 -framerate 24 -pix_fmt yuv420p -i ref_source.yuv -s 1920x1080 -framerate
+24 -pix_fmt yuv420p -i test_video.yuv -lavfi xpsnr="stats_file=xpsnr.log" -f null -
+@end example
+
+@item
+XPSNR analysis of two 2160p UHD videos, ref_source.yuv with bit depth 8 and test_video.yuv
+with bit depth 10, both at 60 frames per second with color format 4:2:0, no logfile output:
+@example
+ffmpeg -s 3840x2160 -framerate 60 -pix_fmt yuv420p -i ref_source.yuv -s 3840x2160 -framerate
+60 -pix_fmt yuv420p10le -i test_video.yuv -lavfi xpsnr="stats_file=-" -f null -
+@end example
+@end itemize
 
 @anchor{xstack}
 @section xstack
@@ -27296,8 +27905,7 @@ The inputs have same memory layout for color channels, the overlay has additiona
 
 @section tonemap_vaapi
 
-Perform HDR(High Dynamic Range) to SDR(Standard Dynamic Range) conversion with tone-mapping.
-It maps the dynamic range of HDR10 content to the SDR content.
+Perform HDR-to-SDR or HDR-to-HDR tone-mapping.
 It currently only accepts HDR10 as input.
 
 It accepts the following parameters:
@@ -27306,28 +27914,42 @@ It accepts the following parameters:
 @item format
 Specify the output pixel format.
 
-Currently supported formats are:
-@table @var
-@item p010
-@item nv12
-@end table
-
-Default is nv12.
+Default is nv12 for HDR-to-SDR tone-mapping and p010 for HDR-to-HDR
+tone-mapping.
 
 @item primaries, p
 Set the output color primaries.
 
-Default is same as input.
+Default is bt709 for HDR-to-SDR tone-mapping and same as input for HDR-to-HDR
+tone-mapping.
 
 @item transfer, t
 Set the output transfer characteristics.
 
-Default is bt709.
+Default is bt709 for HDR-to-SDR tone-mapping and same as input for HDR-to-HDR
+tone-mapping.
 
 @item matrix, m
 Set the output colorspace matrix.
 
-Default is same as input.
+Default is bt709 for HDR-to-SDR tone-mapping and same as input for HDR-to-HDR
+tone-mapping.
+
+@item display
+Set the output mastering display colour volume. It is given by a '|'-separated
+list of two values, two values are space separated. It set display primaries
+x & y in G, B, R order, then white point x & y, the nominal minimum & maximum
+display luminances.
+
+HDR-to-HDR tone-mapping will be performed when this option is set.
+
+@item light
+Set the output content light level information. It accepts 2 space-separated
+values, the first input is the maximum light level and the second input is
+the maximum average light level.
+
+It is ignored for HDR-to-SDR tone-mapping, and optional for HDR-to-HDR
+tone-mapping.
 
 @end table
 
@@ -27339,6 +27961,11 @@ Convert HDR(HDR10) video to bt2020-transfer-characteristic p010 format
 @example
 tonemap_vaapi=format=p010:t=bt2020-10
 @end example
+@item
+Convert HDR video to HDR video
+@example
+tonemap_vaapi=display=7500\ 3000|34000\ 16000|13250\ 34500|15635\ 16450|500\ 10000000
+@end example
 @end itemize
 
 @section hstack_vaapi
@@ -27346,7 +27973,7 @@ Stack input videos horizontally.
 
 This is the VA-API variant of the @ref{hstack} filter, each input stream may
 have different height, this filter will scale down/up each input stream while
-keeping the orignal aspect.
+keeping the original aspect.
 
 It accepts the following options:
 
@@ -27367,7 +27994,7 @@ Stack input videos vertically.
 
 This is the VA-API variant of the @ref{vstack} filter, each input stream may
 have different width, this filter will scale down/up each input stream while
-keeping the orignal aspect.
+keeping the original aspect.
 
 It accepts the following options:
 
@@ -27418,6 +28045,168 @@ first input stream. For the syntax of this option, check the
 @item fill
 See @ref{xstack}.
 @end table
+
+@section pad_vaapi
+
+Add paddings to the input image, and place the original input at the
+provided @var{x}, @var{y} coordinates.
+
+It accepts the following options:
+
+@table @option
+@item width, w
+@item height, h
+Specify an expression for the size of the output image with the
+paddings added. If the value for @var{width} or @var{height} is 0, the
+corresponding input size is used for the output.
+
+The @var{width} expression can reference the value set by the
+@var{height} expression, and vice versa.
+
+The default value of @var{width} and @var{height} is 0.
+
+@item x
+@item y
+Specify the offsets to place the input image at within the padded area,
+with respect to the top/left border of the output image.
+
+The @var{x} expression can reference the value set by the @var{y}
+expression, and vice versa.
+
+The default value of @var{x} and @var{y} is 0.
+
+If @var{x} or @var{y} evaluate to a negative number, they'll be changed
+so the input image is centered on the padded area.
+
+@item color
+Specify the color of the padded area. For the syntax of this option,
+check the @ref{color syntax,,"Color" section in the ffmpeg-utils
+manual,ffmpeg-utils}.
+
+@item aspect
+Pad to an aspect instead to a resolution.
+@end table
+
+The value for the @var{width}, @var{height}, @var{x}, and @var{y}
+options are expressions containing the following constants:
+
+@table @option
+@item in_w
+@item in_h
+The input video width and height.
+
+@item iw
+@item ih
+These are the same as @var{in_w} and @var{in_h}.
+
+@item out_w
+@item out_h
+The output width and height (the size of the padded area), as
+specified by the @var{width} and @var{height} expressions.
+
+@item ow
+@item oh
+These are the same as @var{out_w} and @var{out_h}.
+
+@item x
+@item y
+The x and y offsets as specified by the @var{x} and @var{y}
+expressions, or NAN if not yet specified.
+
+@item a
+same as @var{iw} / @var{ih}
+
+@item sar
+input sample aspect ratio
+
+@item dar
+input display aspect ratio, it is the same as (@var{iw} / @var{ih}) * @var{sar}
+@end table
+
+@section drawbox_vaapi
+
+Draw a colored box on the input image.
+
+It accepts the following parameters:
+
+@table @option
+@item x
+@item y
+The expressions which specify the top left corner coordinates of the box. It defaults to 0.
+
+@item width, w
+@item height, h
+The expressions which specify the width and height of the box; if 0 they are interpreted as
+the input width and height. It defaults to 0.
+
+@item color, c
+Specify the color of the box to write. For the general syntax of this option,
+check the @ref{color syntax,,"Color" section in the ffmpeg-utils manual,ffmpeg-utils}.
+
+@item thickness, t
+The expression which sets the thickness of the box edge.
+A value of @code{fill} will create a filled box. Default value is @code{3}.
+
+See below for the list of accepted constants.
+
+@item replace
+With value @code{1}, the pixels of the painted box will overwrite the video's color and alpha pixels.
+Default is @code{0}, which composites the box onto the input video.
+@end table
+
+The parameters for @var{x}, @var{y}, @var{w} and @var{h} and @var{t} are expressions containing the
+following constants:
+
+@table @option
+@item in_h, ih
+@item in_w, iw
+The input width and height.
+
+@item x
+@item y
+The x and y offset coordinates where the box is drawn.
+
+@item w
+@item h
+The width and height of the drawn box.
+
+@item t
+The thickness of the drawn box.
+
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+Draw a black box around the edge of the input image:
+@example
+drawbox
+@end example
+
+@item
+Draw a box with color red and an opacity of 50%:
+@example
+drawbox=10:20:200:60:red@@0.5
+@end example
+
+The previous example can be specified as:
+@example
+drawbox=x=10:y=20:w=200:h=60:color=red@@0.5
+@end example
+
+@item
+Fill the box with pink color:
+@example
+drawbox=x=10:y=10:w=100:h=100:color=pink@@0.5:t=fill
+@end example
+
+@item
+Draw a 2-pixel red 2.40:1 mask:
+@example
+drawbox=x=-t:y=0.5*(ih-iw/2.4)-t:w=iw+t*2:h=iw/2.4+t*2:t=2:c=red
+@end example
+@end itemize
 
 @c man end VAAPI VIDEO FILTERS
 
@@ -27828,7 +28617,7 @@ Stack input videos horizontally.
 
 This is the QSV variant of the @ref{hstack} filter, each input stream may
 have different height, this filter will scale down/up each input stream while
-keeping the orignal aspect.
+keeping the original aspect.
 
 It accepts the following options:
 
@@ -27849,7 +28638,7 @@ Stack input videos vertically.
 
 This is the QSV variant of the @ref{vstack} filter, each input stream may
 have different width, this filter will scale down/up each input stream while
-keeping the orignal aspect.
+keeping the original aspect.
 
 It accepts the following options:
 
@@ -27938,6 +28727,16 @@ Specify the timebase assumed by the timestamps of the buffered frames.
 
 @item frame_rate
 Specify the frame rate expected for the video stream.
+
+@item colorspace
+A string representing the color space of the buffered video frames.
+It may be a number corresponding to a color space, or a color space
+name.
+
+@item range
+A string representing the color range of the buffered video frames.
+It may be a number corresponding to a color range, or a color range
+name.
 
 @item pixel_aspect, sar
 The sample (pixel) aspect ratio of the input video.
@@ -28170,7 +28969,12 @@ Only affects hardware cursors. If a game or application renders its own cursor,
 it'll always be captured.
 
 @item framerate
-Framerate at which the desktop will be captured.
+Maximum framerate at which the desktop will be captured - the interval between
+successive frames will not be smaller than the inverse of the framerate. When
+@var{dup_frames} is true (the default) and the desktop is not being updated
+often enough, the filter will duplicate a previous frame. Note that there is no
+background buffering going on, so when the filter is not polled often enough
+then the actual inter-frame interval may be significantly larger.
 
 Defaults to 30 FPS.
 
@@ -28197,11 +29001,18 @@ It accepts the following values:
 Passes all supported output formats to DDA and returns what DDA decides to use.
 @item 8bit
 @item bgra
-8 Bit formats always work, and DDA will convert to them if neccesary.
+8 Bit formats always work, and DDA will convert to them if necessary.
 @item 10bit
 @item x2bgr10
 Filter initialization will fail if 10 bit format is requested but unavailable.
 @end table
+
+@item dup_frames
+When this option is set to true (the default), the filter will duplicate frames
+when the desktop has not been updated in order to maintain approximately
+constant target framerate. When this option is set to false, the filter will
+wait for the desktop to be updated (inter-frame intervals may vary significantly
+in this case).
 
 @end table
 
@@ -28263,9 +29074,22 @@ supposed to be generated forever.
 Set speed of gradients rotation.
 
 @item type, t
-Set type of gradients, can be @code{linear} or @code{radial} or @code{circular} or @code{spiral}.
+Set type of gradients.
+Available values are:
+@table @samp
+@item linear
+@item radial
+@item circular
+@item spiral
+@item square
 @end table
 
+Default type is @var{linear}.
+@end table
+
+@subsection Commands
+
+This source supports the some above options as @ref{commands}.
 
 @section mandelbrot
 
@@ -28558,6 +29382,238 @@ Full example with slow death effect (mold) using @command{ffplay}:
 @example
 ffplay -f lavfi life=s=300x200:mold=10:r=60:ratio=0.1:death_color=#C83232:life_color=#00ff00,scale=1200:800:flags=16
 @end example
+@end itemize
+
+@section perlin
+Generate Perlin noise.
+
+Perlin noise is a kind of noise with local continuity in space. This
+can be used to generate patterns with continuity in space and time,
+e.g. to simulate smoke, fluids, or terrain.
+
+In case more than one octave is specified through the @option{octaves}
+option, Perlin noise is generated as a sum of components, each one
+with doubled frequency. In this case the @option{persistence} option
+specify the ratio of the amplitude with respect to the previous
+component. More octave components enable to specify more high
+frequency details in the generated noise (e.g. small size variations
+due to boulders in a generated terrain).
+
+@subsection Options
+@table @option
+
+@item size, s
+Specify the size (width and height) of the buffered video frames. For the
+syntax of this option, check the
+@ref{video size syntax,,"Video size" section in the ffmpeg-utils manual,ffmpeg-utils}.
+Default value is @code{320x240}.
+
+@item rate, r
+Specify the frame rate expected for the video stream, expressed as a
+number of frames per second. Default value is @code{25}.
+
+@item octaves
+Specify the total number of components making up the noise, each one
+with doubled frequency. Default value is @code{1}.
+
+@item persistence
+Set the ratio used to compute the amplitude of the next octave
+component with respect to the previous component amplitude. Default
+value is @code{1}.
+
+@item xscale
+@item yscale
+Define a scale factor used to multiple the x, y coordinates. This can
+be useful to define an effect with a pattern stretched along the x or
+y axis. Default value is @code{1}.
+
+@item tscale
+Define a scale factor used to multiple the time coordinate. This can
+be useful to change the time variation speed. Default value is @code{1}.
+
+@item random_mode
+Set random mode used to compute initial pattern.
+
+Supported values are:
+@table @option
+@item random
+Compute and use random seed.
+
+@item ken
+Use the predefined initial pattern defined by Ken Perlin in the
+original article, can be useful to compare the output with other
+sources.
+
+@item seed
+Use the value specified by @option{random_seed} option.
+@end table
+
+Default value is @code{random}.
+
+@item random_seed, seed
+When @option{random_mode} is set to @var{random_seed}, use this value
+to compute the initial pattern. Default value is @code{0}.
+@end table
+
+@subsection Examples
+@itemize
+@item
+Generate single component:
+@example
+perlin
+@end example
+
+@item
+Use Perlin noise with 7 components, each one with a halved contribution
+to total amplitude:
+@example
+perlin=octaves=7:persistence=0.5
+@end example
+
+@item
+Chain Perlin noise with the @ref{lutyuv} to generate a black&white
+effect:
+@example
+perlin=octaves=3:tscale=0.3,lutyuv=y='if(lt(val\,128)\,255\,0)'
+@end example
+
+@item
+Stretch noise along the y axis, and convert gray level to red-only
+signal:
+@example
+perlin=octaves=7:tscale=0.4:yscale=0.3,lutrgb=r=val:b=0:g=0
+@end example
+@end itemize
+
+@section qrencodesrc
+
+Generate a QR code using the libqrencode library (see
+@url{https://fukuchi.org/works/qrencode/}).
+
+To enable the compilation of this source, you need to configure FFmpeg with
+@code{--enable-libqrencode}.
+
+The QR code is generated from the provided text or text pattern. The
+corresponding QR code is scaled and put in the video output according to the
+specified output size options.
+
+In case no text is specified, the QR code is not generated, but an empty colored
+output is returned instead.
+
+This source accepts the following options:
+
+@table @option
+
+@item qrcode_width, q
+@item padded_qrcode_width, Q
+Specify an expression for the width of the rendered QR code, with and without
+padding. The @var{qrcode_width} expression can reference the value set by the
+@var{padded_qrcode_width} expression, and vice versa.
+By default @var{padded_qrcode_width} is set to @var{qrcode_width}, meaning that
+there is no padding.
+
+These expressions are evaluated only once, when initializing the source.
+See the @ref{qrencode_expressions,,qrencode Expressions} section for details.
+
+Note that some of the constants are missing for the source (for example the
+@var{x} or @var{t} or ¸@var{n}), since they only makes sense when evaluating the
+expression for each frame rather than at initialization time.
+
+@item rate, r
+Specify the frame rate of the sourced video, as the number of frames
+generated per second. It has to be a string in the format
+@var{frame_rate_num}/@var{frame_rate_den}, an integer number, a floating point
+number or a valid video frame rate abbreviation. The default value is
+"25".
+
+@item case_sensitive, cs
+Instruct libqrencode to use case sensitive encoding. This is enabled by
+default. This can be disabled to reduce the QR encoding size.
+
+@item level, l
+Specify the QR encoding error correction level. With an higher correction level,
+the encoding size will increase but the code will be more robust to corruption.
+Lower level is @var{L}.
+
+It accepts the following values:
+@table @samp
+@item L
+@item M
+@item Q
+@item H
+@end table
+
+@item expansion
+Select how the input text is expanded. Can be either @code{none}, or
+@code{normal} (default). See the @ref{qrencode_text_expansion,,qrencode Text expansion}
+section for details.
+
+@item text
+@item textfile
+Define the text to be rendered. In case neither is specified, no QR is encoded
+(just an empty colored frame).
+
+In case expansion is enabled, the text is treated as a text template, using the
+qrencode expansion mechanism. See the @ref{qrencode_text_expansion,,qrencode
+Text expansion} section for details.
+
+@item background_color, bc
+@item foreground_color, fc
+Set the QR code and background color. The default value of
+@var{foreground_color} is "black", the default value of @var{background_color}
+is "white".
+
+For the syntax of the color options, check the @ref{color syntax,,"Color"
+section in the ffmpeg-utils manual,ffmpeg-utils}.
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+Generate a QR code encoding the specified text with the default size:
+@example
+qrencodesrc=text=www.ffmpeg.org
+@end example
+
+@item
+Same as below, but select blue on pink colors:
+@example
+qrencodesrc=text=www.ffmpeg.org:bc=pink:fc=blue
+@end example
+
+@item
+Generate a QR code with width of 200 pixels and padding, making the padded width
+4/3 of the QR code width:
+@example
+qrencodesrc=text=www.ffmpeg.org:q=200:Q=4/3*q
+@end example
+
+@item
+Generate a QR code with padded width of 200 pixels and padding, making the QR
+code width 3/4 of the padded width:
+@example
+qrencodesrc=text=www.ffmpeg.org:Q=200:q=3/4*Q
+@end example
+
+@item
+Generate a QR code encoding the frame number:
+@example
+qrencodesrc=text=%@{n@}
+@end example
+
+@item
+Generate a QR code encoding the GMT timestamp:
+@example
+qrencodesrc=text=%@{gmtime@}
+@end example
+
+@item
+Generate a QR code encoding the timestamp expressed as a float:
+@example
+qrencodesrc=text=%@{pts@}
+@end example
+
 @end itemize
 
 @anchor{allrgb}
@@ -30049,6 +31105,15 @@ missing.
 That basically means that an input frame is selected if its pts is within the
 interval set by the concat demuxer.
 
+@item iw @emph{(video only)}
+Represents the width of the input video frame.
+
+@item ih @emph{(video only)}
+Represents the height of the input video frame.
+
+@item view @emph{(video only)}
+View ID for multi-view video.
+
 @end table
 
 The default value of the select expression is "1".
@@ -30415,6 +31480,12 @@ setpts=2.0*PTS
 Set fixed rate of 25 frames per second:
 @example
 setpts=N/(25*TB)
+@end example
+
+@item
+Apply a random jitter effect of +/-100 TB units:
+@example
+setpts=PTS+randomi(0, -100\,100)
 @end example
 
 @item
@@ -30842,6 +31913,7 @@ Set the frequency scale used. Allowed values are:
 @item sqrt
 @item cbrt
 @item qdrt
+@item fm
 @end table
 Default value is @code{linear}.
 

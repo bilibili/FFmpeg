@@ -28,10 +28,12 @@
 #include "decode_simple.h"
 
 #include "libavutil/adler32.h"
+#include "libavutil/avassert.h"
 #include "libavutil/common.h"
 #include "libavutil/error.h"
 #include "libavutil/frame.h"
 #include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 
 #include "libavformat/avformat.h"
@@ -87,6 +89,8 @@ static int frame_hash(FrameChecksum **pc, size_t *nb_c, int64_t ts,
         const uint8_t *data = frame->data[p];
         int linesize = av_image_get_linesize(frame->format, frame->width, p);
         uint32_t checksum = 0;
+
+        av_assert0(linesize >= 0);
 
         for (int j = 0; j < frame->height >> shift_v[p]; j++) {
             checksum = av_adler32_update(checksum, data, linesize);
@@ -297,7 +301,7 @@ int main(int argc, char **argv)
         return 1;
     }
     if (!(enc->capabilities & AV_CODEC_CAP_ENCODER_RECON_FRAME)) {
-        fprintf(stderr, "Encoder '%s' cannot ouput reconstructed frames\n",
+        fprintf(stderr, "Encoder '%s' cannot output reconstructed frames\n",
                 enc->name);
         return 1;
     }

@@ -85,12 +85,6 @@ FF_DISABLE_DEPRECATION_WARNINGS
     frm->pkt_size  = dec_frame->pkt_size;
 FF_ENABLE_DEPRECATION_WARNINGS
 #endif
-#if FF_API_FRAME_PICTURE_NUMBER
-FF_DISABLE_DEPRECATION_WARNINGS
-    frm->coded_picture_number   = dec_frame->dtr;
-    frm->display_picture_number = dec_frame->ptr;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
 
     if (dec_frame->type < 0 || dec_frame->type >= FF_ARRAY_ELEMS(ff_avs3_image_type)) {
         av_log(NULL, AV_LOG_WARNING, "Error frame type in uavs3d: %d.\n", dec_frame->type);
@@ -274,8 +268,5 @@ const FFCodec ff_libuavs3d_decoder = {
     .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE |
                       FF_CODEC_CAP_AUTO_THREADS,
     .flush          = libuavs3d_flush,
-    .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV420P,
-                                                     AV_PIX_FMT_YUV420P10LE,
-                                                     AV_PIX_FMT_NONE },
     .p.wrapper_name = "libuavs3d",
 };

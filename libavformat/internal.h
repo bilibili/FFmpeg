@@ -39,12 +39,6 @@
 #    define hex_dump_debug(class, buf, size) do { if (0) av_hex_dump_log(class, AV_LOG_DEBUG, buf, size); } while(0)
 #endif
 
-/**
- * For an AVInputFormat with this flag set read_close() needs to be called
- * by the caller upon read_header() failure.
- */
-#define FF_FMT_INIT_CLEANUP                             (1 << 0)
-
 typedef struct AVCodecTag {
     enum AVCodecID id;
     unsigned int tag;
@@ -202,6 +196,7 @@ typedef struct FFStream {
      */
     AVStream pub;
 
+    AVFormatContext *fmtctx;
     /**
      * Set to 1 if the codec allows reordering, so pts can be different
      * from dts.
@@ -244,7 +239,7 @@ typedef struct FFStream {
 
     int is_intra_only;
 
-    FFFrac *priv_pts;
+    FFFrac priv_pts;
 
     /**
      * Stream information used internally by avformat_find_stream_info()
@@ -415,6 +410,10 @@ typedef struct FFStream {
     int64_t cur_dts;
 
     const struct AVCodecDescriptor *codec_desc;
+
+#if FF_API_INTERNAL_TIMING
+    AVRational transferred_mux_tb;
+#endif
 } FFStream;
 
 static av_always_inline FFStream *ffstream(AVStream *st)
@@ -425,6 +424,26 @@ static av_always_inline FFStream *ffstream(AVStream *st)
 static av_always_inline const FFStream *cffstream(const AVStream *st)
 {
     return (const FFStream*)st;
+}
+
+typedef struct FFStreamGroup {
+    /**
+     * The public context.
+     */
+    AVStreamGroup pub;
+
+    AVFormatContext *fmtctx;
+} FFStreamGroup;
+
+
+static av_always_inline FFStreamGroup *ffstreamgroup(AVStreamGroup *stg)
+{
+    return (FFStreamGroup*)stg;
+}
+
+static av_always_inline const FFStreamGroup *cffstreamgroup(const AVStreamGroup *stg)
+{
+    return (const FFStreamGroup*)stg;
 }
 
 #ifdef __GNUC__
@@ -608,6 +627,18 @@ void ff_free_stream(AVStream **st);
  */
 void ff_remove_stream(AVFormatContext *s, AVStream *st);
 
+/**
+ * Frees a stream group without modifying the corresponding AVFormatContext.
+ * Must only be called if the latter doesn't matter or if the stream
+ * is not yet attached to an AVFormatContext.
+ */
+void ff_free_stream_group(AVStreamGroup **pstg);
+/**
+ * Remove a stream group from its AVFormatContext and free it.
+ * The stream group must be the last stream group of the AVFormatContext.
+ */
+void ff_remove_stream_group(AVFormatContext *s, AVStreamGroup *stg);
+
 unsigned int ff_codec_get_tag(const AVCodecTag *tags, enum AVCodecID id);
 
 enum AVCodecID ff_codec_get_id(const AVCodecTag *tags, unsigned int tag);
@@ -684,10 +715,6 @@ int ff_copy_whiteblacklists(AVFormatContext *dst, const AVFormatContext *src);
  */
 int ff_format_io_close(AVFormatContext *s, AVIOContext **pb);
 
-/* Default io_close callback, not to be used directly, use ff_format_io_close
- * instead. */
-void ff_format_io_close_default(AVFormatContext *s, AVIOContext *pb);
-
 /**
  * Utility function to check if the file uses http or https protocol
  *
@@ -701,9 +728,6 @@ struct AVBPrint;
  * Finalize buf into extradata and set its size appropriately.
  */
 int ff_bprint_to_codecpar_extradata(AVCodecParameters *par, struct AVBPrint *buf);
-
-int ff_lock_avformat(void);
-int ff_unlock_avformat(void);
 
 /**
  * Set AVFormatContext url field to the provided pointer. The pointer must
@@ -722,6 +746,8 @@ void ff_format_set_url(AVFormatContext *s, char *url);
 int ff_match_url_ext(const char *url, const char *extensions);
 
 struct FFOutputFormat;
-void avpriv_register_devices(const struct FFOutputFormat * const o[], const AVInputFormat * const i[]);
+struct FFInputFormat;
+void avpriv_register_devices(const struct FFOutputFormat * const o[],
+                             const struct FFInputFormat * const i[]);
 
 #endif /* AVFORMAT_INTERNAL_H */

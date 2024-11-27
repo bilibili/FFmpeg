@@ -36,6 +36,7 @@
 #include "libavutil/emms.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/avassert.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "avcodec.h"
 #include "blockdsp.h"
@@ -52,7 +53,6 @@
 #include "jpeglsdec.h"
 #include "profiles.h"
 #include "put_bits.h"
-#include "tiff.h"
 #include "exif.h"
 #include "bytestream.h"
 #include "tiff_common.h"
@@ -843,9 +843,8 @@ static int decode_block(MJpegDecodeContext *s, int16_t *block, int component,
         return AVERROR_INVALIDDATA;
     }
     val = val * (unsigned)quant_matrix[0] + s->last_dc[component];
-    val = av_clip_int16(val);
     s->last_dc[component] = val;
-    block[0] = val;
+    block[0] = av_clip_int16(val);
     /* AC coefs */
     i = 0;
     {OPEN_READER(re, &s->gb);
@@ -2378,7 +2377,7 @@ int ff_mjpeg_decode_frame_from_buf(AVCodecContext *avctx, AVFrame *frame,
     int hshift, vshift;
     int unescaped_buf_size;
     int start_code;
-    int i, index;
+    int index;
     int ret = 0;
     int is16bit;
     AVDictionaryEntry *e = NULL;
@@ -2422,7 +2421,7 @@ redo_for_pal8:
         }
 
         s->start_code = start_code;
-        if (s->avctx->debug & FF_DEBUG_STARTCODE)
+        if (avctx->debug & FF_DEBUG_STARTCODE)
             av_log(avctx, AV_LOG_DEBUG, "startcode: %X\n", start_code);
 
         /* process markers */
@@ -2486,9 +2485,9 @@ redo_for_pal8:
         case SOF0:
         case SOF1:
             if (start_code == SOF0)
-                s->avctx->profile = AV_PROFILE_MJPEG_HUFFMAN_BASELINE_DCT;
+                avctx->profile = AV_PROFILE_MJPEG_HUFFMAN_BASELINE_DCT;
             else
-                s->avctx->profile = AV_PROFILE_MJPEG_HUFFMAN_EXTENDED_SEQUENTIAL_DCT;
+                avctx->profile = AV_PROFILE_MJPEG_HUFFMAN_EXTENDED_SEQUENTIAL_DCT;
             s->lossless    = 0;
             s->ls          = 0;
             s->progressive = 0;
@@ -2496,7 +2495,7 @@ redo_for_pal8:
                 goto fail;
             break;
         case SOF2:
-            s->avctx->profile = AV_PROFILE_MJPEG_HUFFMAN_PROGRESSIVE_DCT;
+            avctx->profile = AV_PROFILE_MJPEG_HUFFMAN_PROGRESSIVE_DCT;
             s->lossless    = 0;
             s->ls          = 0;
             s->progressive = 1;
@@ -2504,8 +2503,8 @@ redo_for_pal8:
                 goto fail;
             break;
         case SOF3:
-            s->avctx->profile     = AV_PROFILE_MJPEG_HUFFMAN_LOSSLESS;
-            s->avctx->properties |= FF_CODEC_PROPERTY_LOSSLESS;
+            avctx->profile     = AV_PROFILE_MJPEG_HUFFMAN_LOSSLESS;
+            avctx->properties |= FF_CODEC_PROPERTY_LOSSLESS;
             s->lossless    = 1;
             s->ls          = 0;
             s->progressive = 0;
@@ -2513,8 +2512,8 @@ redo_for_pal8:
                 goto fail;
             break;
         case SOF48:
-            s->avctx->profile     = AV_PROFILE_MJPEG_JPEG_LS;
-            s->avctx->properties |= FF_CODEC_PROPERTY_LOSSLESS;
+            avctx->profile     = AV_PROFILE_MJPEG_JPEG_LS;
+            avctx->properties |= FF_CODEC_PROPERTY_LOSSLESS;
             s->lossless    = 1;
             s->ls          = 1;
             s->progressive = 0;
@@ -2549,8 +2548,8 @@ eoi_parser:
                 s->got_picture = 0;
                 goto the_end_no_picture;
             }
-            if (s->avctx->hwaccel) {
-                ret = FF_HW_SIMPLE_CALL(s->avctx, end_frame);
+            if (avctx->hwaccel) {
+                ret = FF_HW_SIMPLE_CALL(avctx, end_frame);
                 if (ret < 0)
                     return ret;
 
@@ -2621,7 +2620,7 @@ fail:
     return ret;
 the_end:
 
-    is16bit = av_pix_fmt_desc_get(s->avctx->pix_fmt)->comp[0].step > 1;
+    is16bit = av_pix_fmt_desc_get(avctx->pix_fmt)->comp[0].step > 1;
 
     if (AV_RB32(s->upscale_h)) {
         int p;
@@ -2640,7 +2639,7 @@ the_end:
                    avctx->pix_fmt == AV_PIX_FMT_GBRP     ||
                    avctx->pix_fmt == AV_PIX_FMT_GBRAP
                   );
-        ret = av_pix_fmt_get_chroma_sub_sample(s->avctx->pix_fmt, &hshift, &vshift);
+        ret = av_pix_fmt_get_chroma_sub_sample(avctx->pix_fmt, &hshift, &vshift);
         if (ret)
             return ret;
 
@@ -2658,7 +2657,7 @@ the_end:
             if (s->upscale_v[p] == 1)
                 h = (h+1)>>1;
             av_assert0(w > 0);
-            for (i = 0; i < h; i++) {
+            for (int i = 0; i < h; i++) {
                 if (s->upscale_h[p] == 1) {
                     if (is16bit) ((uint16_t*)line)[w - 1] = ((uint16_t*)line)[(w - 1) / 2];
                     else                      line[w - 1] = line[(w - 1) / 2];
@@ -2720,7 +2719,7 @@ the_end:
                    avctx->pix_fmt == AV_PIX_FMT_GBRP     ||
                    avctx->pix_fmt == AV_PIX_FMT_GBRAP
                    );
-        ret = av_pix_fmt_get_chroma_sub_sample(s->avctx->pix_fmt, &hshift, &vshift);
+        ret = av_pix_fmt_get_chroma_sub_sample(avctx->pix_fmt, &hshift, &vshift);
         if (ret)
             return ret;
 
@@ -2736,7 +2735,7 @@ the_end:
                 h = AV_CEIL_RSHIFT(h, vshift);
             }
             dst = &((uint8_t *)s->picture_ptr->data[p])[(h - 1) * s->linesize[p]];
-            for (i = h - 1; i; i--) {
+            for (int i = h - 1; i; i--) {
                 uint8_t *src1 = &((uint8_t *)s->picture_ptr->data[p])[i * s->upscale_v[p] / (s->upscale_v[p] + 1) * s->linesize[p]];
                 uint8_t *src2 = &((uint8_t *)s->picture_ptr->data[p])[(i + 1) * s->upscale_v[p] / (s->upscale_v[p] + 1) * s->linesize[p]];
                 if (s->upscale_v[p] != 2 && (src1 == src2 || i == h - 1)) {
@@ -2750,7 +2749,7 @@ the_end:
         }
     }
     if (s->flipped && !s->rgb) {
-        ret = av_pix_fmt_get_chroma_sub_sample(s->avctx->pix_fmt, &hshift, &vshift);
+        ret = av_pix_fmt_get_chroma_sub_sample(avctx->pix_fmt, &hshift, &vshift);
         if (ret)
             return ret;
 
@@ -2766,7 +2765,7 @@ the_end:
         }
     }
 
-    if (s->avctx->pix_fmt == AV_PIX_FMT_GBRP) {
+    if (avctx->pix_fmt == AV_PIX_FMT_GBRP) {
         av_assert0(s->nb_components == 3);
         FFSWAP(uint8_t *, frame->data[0], frame->data[2]);
         FFSWAP(uint8_t *, frame->data[0], frame->data[1]);
@@ -2774,11 +2773,11 @@ the_end:
         FFSWAP(int, frame->linesize[0], frame->linesize[1]);
     }
 
-    if (s->adobe_transform == 0 && s->avctx->pix_fmt == AV_PIX_FMT_GBRAP) {
+    if (s->adobe_transform == 0 && avctx->pix_fmt == AV_PIX_FMT_GBRAP) {
         int w = s->picture_ptr->width;
         int h = s->picture_ptr->height;
         av_assert0(s->nb_components == 4);
-        for (i=0; i<h; i++) {
+        for (int i = 0; i < h; i++) {
             int j;
             uint8_t *dst[4];
             for (index=0; index<4; index++) {
@@ -2793,15 +2792,15 @@ the_end:
                 dst[0][j] = g*257 >> 16;
                 dst[1][j] = b*257 >> 16;
                 dst[2][j] = r*257 >> 16;
-                dst[3][j] = 255;
             }
+            memset(dst[3], 255, w);
         }
     }
-    if (s->adobe_transform == 2 && s->avctx->pix_fmt == AV_PIX_FMT_YUVA444P) {
+    if (s->adobe_transform == 2 && avctx->pix_fmt == AV_PIX_FMT_YUVA444P) {
         int w = s->picture_ptr->width;
         int h = s->picture_ptr->height;
         av_assert0(s->nb_components == 4);
-        for (i=0; i<h; i++) {
+        for (int i = 0; i < h; i++) {
             int j;
             uint8_t *dst[4];
             for (index=0; index<4; index++) {
@@ -2816,8 +2815,8 @@ the_end:
                 dst[0][j] = r*257 >> 16;
                 dst[1][j] = (g*257 >> 16) + 128;
                 dst[2][j] = (b*257 >> 16) + 128;
-                dst[3][j] = 255;
             }
+            memset(dst[3], 255, w);
         }
     }
 
@@ -2834,22 +2833,23 @@ the_end:
         AVFrameSideData *sd;
         size_t offset = 0;
         int total_size = 0;
-        int i;
 
         /* Sum size of all parts. */
-        for (i = 0; i < s->iccnum; i++)
+        for (int i = 0; i < s->iccnum; i++)
             total_size += s->iccentries[i].length;
 
-        sd = av_frame_new_side_data(frame, AV_FRAME_DATA_ICC_PROFILE, total_size);
-        if (!sd) {
-            av_log(s->avctx, AV_LOG_ERROR, "Could not allocate frame side data\n");
-            return AVERROR(ENOMEM);
+        ret = ff_frame_new_side_data(avctx, frame, AV_FRAME_DATA_ICC_PROFILE, total_size, &sd);
+        if (ret < 0) {
+            av_log(avctx, AV_LOG_ERROR, "Could not allocate frame side data\n");
+            return ret;
         }
 
-        /* Reassemble the parts, which are now in-order. */
-        for (i = 0; i < s->iccnum; i++) {
-            memcpy(sd->data + offset, s->iccentries[i].data, s->iccentries[i].length);
-            offset += s->iccentries[i].length;
+        if (sd) {
+            /* Reassemble the parts, which are now in-order. */
+            for (int i = 0; i < s->iccnum; i++) {
+                memcpy(sd->data + offset, s->iccentries[i].data, s->iccentries[i].length);
+                offset += s->iccentries[i].length;
+            }
         }
     }
 
@@ -2865,7 +2865,7 @@ the_end:
 
                 sd = av_frame_new_side_data(frame, AV_FRAME_DATA_DISPLAYMATRIX, sizeof(int32_t) * 9);
                 if (!sd) {
-                    av_log(s->avctx, AV_LOG_ERROR, "Could not allocate frame side data\n");
+                    av_log(avctx, AV_LOG_ERROR, "Could not allocate frame side data\n");
                     return AVERROR(ENOMEM);
                 }
 

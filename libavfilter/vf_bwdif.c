@@ -34,7 +34,7 @@
 #include "avfilter.h"
 #include "bwdifdsp.h"
 #include "ccfifo.h"
-#include "internal.h"
+#include "filters.h"
 #include "yadif.h"
 
 typedef struct BWDIFContext {
@@ -137,17 +137,6 @@ static void filter(AVFilterContext *ctx, AVFrame *dstpic,
     }
 }
 
-static av_cold void uninit(AVFilterContext *ctx)
-{
-    BWDIFContext *bwdif = ctx->priv;
-    YADIFContext *yadif = &bwdif->yadif;
-
-    av_frame_free(&yadif->prev);
-    av_frame_free(&yadif->cur );
-    av_frame_free(&yadif->next);
-    ff_ccfifo_uninit(&yadif->cc_fifo);
-}
-
 static const enum AVPixelFormat pix_fmts[] = {
     AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P, AV_PIX_FMT_YUV420P,
     AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUV444P,
@@ -176,28 +165,18 @@ static int config_props(AVFilterLink *link)
     YADIFContext *yadif = &s->yadif;
     int ret;
 
-    link->time_base = av_mul_q(ctx->inputs[0]->time_base, (AVRational){1, 2});
-    link->w         = link->src->inputs[0]->w;
-    link->h         = link->src->inputs[0]->h;
-
-    if(yadif->mode&1)
-        link->frame_rate = av_mul_q(link->src->inputs[0]->frame_rate, (AVRational){2,1});
-    else
-        link->frame_rate = ctx->inputs[0]->frame_rate;
-
-    ret = ff_ccfifo_init(&yadif->cc_fifo, link->frame_rate, ctx);
-    if (ret < 0 ) {
-        av_log(ctx, AV_LOG_ERROR, "Failure to setup CC FIFO queue\n");
-        return ret;
-    }
-
-    if (link->w < 3 || link->h < 4) {
-        av_log(ctx, AV_LOG_ERROR, "Video of less than 3 columns or 4 lines is not supported\n");
+    ret = ff_yadif_config_output_common(link);
+    if (ret < 0)
         return AVERROR(EINVAL);
-    }
 
     yadif->csp = av_pix_fmt_desc_get(link->format);
     yadif->filter = filter;
+
+    if (AV_CEIL_RSHIFT(link->w, yadif->csp->log2_chroma_w) < 3 || AV_CEIL_RSHIFT(link->h, yadif->csp->log2_chroma_h) < 4) {
+        av_log(ctx, AV_LOG_ERROR, "Video with planes less than 3 columns or 4 lines is not supported\n");
+        return AVERROR(EINVAL);
+    }
+
     ff_bwdif_init_filter_line(&s->dsp, yadif->csp->comp[0].depth);
 
     return 0;
@@ -207,19 +186,19 @@ static int config_props(AVFilterLink *link)
 #define OFFSET(x) offsetof(YADIFContext, x)
 #define FLAGS AV_OPT_FLAG_VIDEO_PARAM|AV_OPT_FLAG_FILTERING_PARAM
 
-#define CONST(name, help, val, unit) { name, help, 0, AV_OPT_TYPE_CONST, {.i64=val}, INT_MIN, INT_MAX, FLAGS, unit }
+#define CONST(name, help, val, u) { name, help, 0, AV_OPT_TYPE_CONST, {.i64=val}, INT_MIN, INT_MAX, FLAGS, .unit = u }
 
 static const AVOption bwdif_options[] = {
-    { "mode",   "specify the interlacing mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=YADIF_MODE_SEND_FIELD}, 0, 1, FLAGS, "mode"},
+    { "mode",   "specify the interlacing mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=YADIF_MODE_SEND_FIELD}, 0, 1, FLAGS, .unit = "mode"},
     CONST("send_frame", "send one frame for each frame", YADIF_MODE_SEND_FRAME, "mode"),
     CONST("send_field", "send one frame for each field", YADIF_MODE_SEND_FIELD, "mode"),
 
-    { "parity", "specify the assumed picture field parity", OFFSET(parity), AV_OPT_TYPE_INT, {.i64=YADIF_PARITY_AUTO}, -1, 1, FLAGS, "parity" },
+    { "parity", "specify the assumed picture field parity", OFFSET(parity), AV_OPT_TYPE_INT, {.i64=YADIF_PARITY_AUTO}, -1, 1, FLAGS, .unit = "parity" },
     CONST("tff",  "assume top field first",    YADIF_PARITY_TFF,  "parity"),
     CONST("bff",  "assume bottom field first", YADIF_PARITY_BFF,  "parity"),
     CONST("auto", "auto detect parity",        YADIF_PARITY_AUTO, "parity"),
 
-    { "deint", "specify which frames to deinterlace", OFFSET(deint), AV_OPT_TYPE_INT, {.i64=YADIF_DEINT_ALL}, 0, 1, FLAGS, "deint" },
+    { "deint", "specify which frames to deinterlace", OFFSET(deint), AV_OPT_TYPE_INT, {.i64=YADIF_DEINT_ALL}, 0, 1, FLAGS, .unit = "deint" },
     CONST("all",        "deinterlace all frames",                       YADIF_DEINT_ALL,        "deint"),
     CONST("interlaced", "only deinterlace frames marked as interlaced", YADIF_DEINT_INTERLACED, "deint"),
 
@@ -250,7 +229,7 @@ const AVFilter ff_vf_bwdif = {
     .description   = NULL_IF_CONFIG_SMALL("Deinterlace the input image."),
     .priv_size     = sizeof(BWDIFContext),
     .priv_class    = &bwdif_class,
-    .uninit        = uninit,
+    .uninit        = ff_yadif_uninit,
     FILTER_INPUTS(avfilter_vf_bwdif_inputs),
     FILTER_OUTPUTS(avfilter_vf_bwdif_outputs),
     FILTER_PIXFMTS_ARRAY(pix_fmts),

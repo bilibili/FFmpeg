@@ -31,6 +31,7 @@
 #include "libavutil/hwcontext_qsv.h"
 #include "libavutil/mem.h"
 #include "libavutil/log.h"
+#include "libavutil/dict.h"
 #include "libavutil/time.h"
 #include "libavutil/imgutils.h"
 
@@ -41,6 +42,7 @@
 #include "qsv.h"
 #include "qsv_internal.h"
 #include "qsvenc.h"
+#include "refstruct.h"
 
 struct profile_names {
     mfxU16 profile;
@@ -597,6 +599,13 @@ static int select_rc_mode(AVCodecContext *avctx, QSVEncContext *q)
     else if (want_vcm) {
         rc_mode = MFX_RATECONTROL_VCM;
         rc_desc = "video conferencing mode (VCM)";
+
+        if (!avctx->bit_rate) {
+            av_log(avctx, AV_LOG_ERROR, "Using the %s ratecontrol method without "
+                   "setting bitrate. Please use the b option to set the desired "
+                   "bitrate.\n", rc_desc);
+            return AVERROR(EINVAL);
+        }
     }
 #endif
     else if (want_la) {
@@ -606,32 +615,50 @@ static int select_rc_mode(AVCodecContext *avctx, QSVEncContext *q)
         if (avctx->global_quality > 0) {
             rc_mode = MFX_RATECONTROL_LA_ICQ;
             rc_desc = "intelligent constant quality with lookahead (LA_ICQ)";
+        } else if (!avctx->bit_rate) {
+            av_log(avctx, AV_LOG_ERROR, "Using the %s ratecontrol method without "
+                   "setting bitrate. Please use the b option to set the desired "
+                   "bitrate.\n", rc_desc);
+            return AVERROR(EINVAL);
         }
     }
     else if (avctx->global_quality > 0 && !avctx->rc_max_rate) {
         rc_mode = MFX_RATECONTROL_ICQ;
         rc_desc = "intelligent constant quality (ICQ)";
     }
-    else if (avctx->rc_max_rate == avctx->bit_rate) {
-        rc_mode = MFX_RATECONTROL_CBR;
-        rc_desc = "constant bitrate (CBR)";
-    }
+    else if (avctx->bit_rate) {
+        if (avctx->rc_max_rate == avctx->bit_rate) {
+            rc_mode = MFX_RATECONTROL_CBR;
+            rc_desc = "constant bitrate (CBR)";
+        }
 #if QSV_HAVE_AVBR
-    else if (!avctx->rc_max_rate &&
-             (avctx->codec_id == AV_CODEC_ID_H264 || avctx->codec_id == AV_CODEC_ID_HEVC) &&
-             q->avbr_accuracy &&
-             q->avbr_convergence) {
-        rc_mode = MFX_RATECONTROL_AVBR;
-        rc_desc = "average variable bitrate (AVBR)";
-    }
+        else if (!avctx->rc_max_rate &&
+                 (avctx->codec_id == AV_CODEC_ID_H264 || avctx->codec_id == AV_CODEC_ID_HEVC) &&
+                 q->avbr_accuracy &&
+                 q->avbr_convergence) {
+            rc_mode = MFX_RATECONTROL_AVBR;
+            rc_desc = "average variable bitrate (AVBR)";
+        }
 #endif
-    else if (avctx->global_quality > 0) {
-        rc_mode = MFX_RATECONTROL_QVBR;
-        rc_desc = "constant quality with VBR algorithm (QVBR)";
-    }
-    else {
-        rc_mode = MFX_RATECONTROL_VBR;
-        rc_desc = "variable bitrate (VBR)";
+        else if (avctx->global_quality > 0) {
+            rc_mode = MFX_RATECONTROL_QVBR;
+            rc_desc = "constant quality with VBR algorithm (QVBR)";
+        } else {
+            rc_mode = MFX_RATECONTROL_VBR;
+            rc_desc = "variable bitrate (VBR)";
+        }
+    } else {
+        rc_mode = MFX_RATECONTROL_CQP;
+        rc_desc = "constant quantization parameter (CQP)";
+        if (avctx->codec_id == AV_CODEC_ID_AV1)
+            avctx->global_quality = FF_QP2LAMBDA * 128;
+        else
+            avctx->global_quality = FF_QP2LAMBDA * 26;
+        av_log(avctx, AV_LOG_WARNING, "Using the constant quantization "
+               "parameter (CQP) by default. Please use the global_quality "
+               "option and other options for a quality-based mode or the b "
+               "option and other options for a bitrate-based mode if the "
+               "default is not the desired choice.\n");
     }
 
     q->param.mfx.RateControlMethod = rc_mode;
@@ -718,8 +745,9 @@ static int init_video_param_jpeg(AVCodecContext *avctx, QSVEncContext *q)
     if (avctx->hw_frames_ctx) {
         AVHWFramesContext *frames_ctx    = (AVHWFramesContext *)avctx->hw_frames_ctx->data;
         AVQSVFramesContext *frames_hwctx = frames_ctx->hwctx;
-        q->param.mfx.FrameInfo.Width  = frames_hwctx->surfaces[0].Info.Width;
-        q->param.mfx.FrameInfo.Height = frames_hwctx->surfaces[0].Info.Height;
+        mfxFrameInfo *info = frames_hwctx->nb_surfaces ? &frames_hwctx->surfaces[0].Info : frames_hwctx->info;
+        q->param.mfx.FrameInfo.Width  = info->Width;
+        q->param.mfx.FrameInfo.Height = info->Height;
     }
 
     if (avctx->framerate.den > 0 && avctx->framerate.num > 0) {
@@ -842,8 +870,9 @@ static int init_video_param(AVCodecContext *avctx, QSVEncContext *q)
     if (avctx->hw_frames_ctx) {
         AVHWFramesContext *frames_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
         AVQSVFramesContext *frames_hwctx = frames_ctx->hwctx;
-        q->param.mfx.FrameInfo.Width  = frames_hwctx->surfaces[0].Info.Width;
-        q->param.mfx.FrameInfo.Height = frames_hwctx->surfaces[0].Info.Height;
+        mfxFrameInfo *info = frames_hwctx->nb_surfaces ? &frames_hwctx->surfaces[0].Info : frames_hwctx->info;
+        q->param.mfx.FrameInfo.Width  = info->Width;
+        q->param.mfx.FrameInfo.Height = info->Height;
     }
 
     if (avctx->framerate.den > 0 && avctx->framerate.num > 0) {
@@ -1608,6 +1637,12 @@ int ff_qsv_enc_init(AVCodecContext *avctx, QSVEncContext *q)
     int iopattern = 0;
     int opaque_alloc = 0;
     int ret;
+    void *tmp;
+#if HAVE_STRUCT_MFXCONFIGINTERFACE
+    mfxExtBuffer ext_buf;
+    mfxConfigInterface *iface = NULL;
+    const AVDictionaryEntry *param = NULL;
+#endif
 
     q->param.AsyncDepth = q->async_depth;
 
@@ -1668,34 +1703,91 @@ int ff_qsv_enc_init(AVCodecContext *avctx, QSVEncContext *q)
     if (ret < 0)
         return ret;
 
+    tmp = av_realloc_array(q->extparam, q->nb_extparam_internal, sizeof(*q->extparam));
+    if (!tmp)
+        return AVERROR(ENOMEM);
+
+    q->extparam = tmp;
+    q->nb_extparam = q->nb_extparam_internal;
+    memcpy(q->extparam, q->extparam_internal, q->nb_extparam * sizeof(*q->extparam));
+
     if (avctx->hwaccel_context) {
         AVQSVContext *qsv = avctx->hwaccel_context;
         int i, j;
 
-        q->extparam = av_calloc(qsv->nb_ext_buffers + q->nb_extparam_internal,
-                                sizeof(*q->extparam));
-        if (!q->extparam)
-            return AVERROR(ENOMEM);
-
-        q->param.ExtParam = q->extparam;
-        for (i = 0; i < qsv->nb_ext_buffers; i++)
-            q->param.ExtParam[i] = qsv->ext_buffers[i];
-        q->param.NumExtParam = qsv->nb_ext_buffers;
-
-        for (i = 0; i < q->nb_extparam_internal; i++) {
-            for (j = 0; j < qsv->nb_ext_buffers; j++) {
-                if (qsv->ext_buffers[j]->BufferId == q->extparam_internal[i]->BufferId)
+        for (i = 0; i < qsv->nb_ext_buffers; i++) {
+            for (j = 0; j < q->nb_extparam_internal; j++) {
+                if (qsv->ext_buffers[i]->BufferId == q->extparam_internal[j]->BufferId) {
+                    q->extparam[j] = qsv->ext_buffers[i];
                     break;
+                }
             }
-            if (j < qsv->nb_ext_buffers)
-                continue;
 
-            q->param.ExtParam[q->param.NumExtParam++] = q->extparam_internal[i];
+            if (j == q->nb_extparam_internal) {
+                tmp = av_realloc_array(q->extparam, q->nb_extparam + 1, sizeof(*q->extparam));
+                if (!tmp)
+                    return AVERROR(ENOMEM);
+
+                q->extparam = tmp;
+                q->extparam[q->nb_extparam++] = qsv->ext_buffers[i];
+            }
         }
-    } else {
-        q->param.ExtParam    = q->extparam_internal;
-        q->param.NumExtParam = q->nb_extparam_internal;
     }
+
+    q->param.ExtParam    = q->extparam;
+    q->param.NumExtParam = q->nb_extparam;
+
+#if HAVE_STRUCT_MFXCONFIGINTERFACE
+    ret = MFXVideoCORE_GetHandle(q->session, MFX_HANDLE_CONFIG_INTERFACE, (mfxHDL *)(&iface));
+    if (ret < 0)
+        return ff_qsv_print_error(avctx, ret,
+                                  "Error getting mfx config interface handle");
+
+    while ((param = av_dict_get(q->qsv_params, "", param, AV_DICT_IGNORE_SUFFIX))) {
+        const char *param_key = param->key;
+        const char *param_value = param->value;
+        mfxExtBuffer *new_ext_buf;
+        void *tmp;
+
+        av_log(avctx, AV_LOG_VERBOSE, "Parameter key: %s, value: %s\n", param_key, param_value);
+
+        // Set encoding parameters using MFXSetParameter
+        for (int i = 0; i < 2; i++) {
+            ret = iface->SetParameter(iface, (mfxU8*)param_key, (mfxU8*)param_value, MFX_STRUCTURE_TYPE_VIDEO_PARAM, &q->param, &ext_buf);
+            if (ret == MFX_ERR_NONE) {
+                break;
+            } else if (i == 0 && ret == MFX_ERR_MORE_EXTBUFFER) {
+                tmp = av_realloc_array(q->extparam_str, q->nb_extparam_str + 1, sizeof(*q->extparam_str));
+                if (!tmp)
+                    return AVERROR(ENOMEM);
+                q->extparam_str = tmp;
+
+                tmp = av_realloc_array(q->extparam, q->nb_extparam + 1, sizeof(*q->extparam));
+                if (!tmp)
+                    return AVERROR(ENOMEM);
+                q->extparam = tmp;
+
+                new_ext_buf = (mfxExtBuffer*)av_mallocz(ext_buf.BufferSz);
+                if (!new_ext_buf)
+                    return AVERROR(ENOMEM);
+
+                new_ext_buf->BufferId = ext_buf.BufferId;
+                new_ext_buf->BufferSz = ext_buf.BufferSz;
+                q->extparam_str[q->nb_extparam_str++] = new_ext_buf;
+                q->extparam[q->nb_extparam++] = new_ext_buf;
+                q->param.ExtParam    = q->extparam;
+                q->param.NumExtParam = q->nb_extparam;
+            } else {
+                av_log(avctx, AV_LOG_ERROR, "Failed to set parameter: %s\n", param_key);
+                return AVERROR_UNKNOWN;
+            }
+       }
+    }
+#else
+    if (q->qsv_params) {
+        av_log(avctx, AV_LOG_WARNING, "MFX string API is not supported, ignore qsv_params option\n");
+    }
+#endif
 
     ret = MFXVideoENCODE_Query(q->session, &q->param, &q->param);
     if (ret == MFX_WRN_PARTIAL_ACCELERATION) {
@@ -2390,7 +2482,7 @@ static int encode_frame(AVCodecContext *avctx, QSVEncContext *q,
 
         if (frame->pict_type == AV_PICTURE_TYPE_I) {
             enc_ctrl->FrameType = MFX_FRAMETYPE_I | MFX_FRAMETYPE_REF;
-            if (q->forced_idr)
+            if ((frame->flags & AV_FRAME_FLAG_KEY) || q->forced_idr)
                 enc_ctrl->FrameType |= MFX_FRAMETYPE_IDR;
         }
     }
@@ -2578,9 +2670,11 @@ int ff_qsv_encode(AVCodecContext *avctx, QSVEncContext *q,
         if (qpkt.bs->FrameType & MFX_FRAMETYPE_IDR || qpkt.bs->FrameType & MFX_FRAMETYPE_xIDR) {
             qpkt.pkt.flags |= AV_PKT_FLAG_KEY;
             pict_type = AV_PICTURE_TYPE_I;
-        } else if (qpkt.bs->FrameType & MFX_FRAMETYPE_I || qpkt.bs->FrameType & MFX_FRAMETYPE_xI)
+        } else if (qpkt.bs->FrameType & MFX_FRAMETYPE_I || qpkt.bs->FrameType & MFX_FRAMETYPE_xI) {
+            if (avctx->codec_id == AV_CODEC_ID_VP9)
+                qpkt.pkt.flags |= AV_PKT_FLAG_KEY;
             pict_type = AV_PICTURE_TYPE_I;
-        else if (qpkt.bs->FrameType & MFX_FRAMETYPE_P || qpkt.bs->FrameType & MFX_FRAMETYPE_xP)
+        } else if (qpkt.bs->FrameType & MFX_FRAMETYPE_P || qpkt.bs->FrameType & MFX_FRAMETYPE_xP)
             pict_type = AV_PICTURE_TYPE_P;
         else if (qpkt.bs->FrameType & MFX_FRAMETYPE_B || qpkt.bs->FrameType & MFX_FRAMETYPE_xB)
             pict_type = AV_PICTURE_TYPE_B;
@@ -2622,7 +2716,7 @@ int ff_qsv_enc_close(AVCodecContext *avctx, QSVEncContext *q)
     ff_qsv_close_internal_session(&q->internal_qs);
 
     av_buffer_unref(&q->frames_ctx.hw_frames_ctx);
-    av_buffer_unref(&q->frames_ctx.mids_buf);
+    ff_refstruct_unref(&q->frames_ctx.mids);
 
     cur = q->work_frames;
     while (cur) {
@@ -2654,6 +2748,10 @@ int ff_qsv_enc_close(AVCodecContext *avctx, QSVEncContext *q)
     av_buffer_unref(&q->opaque_alloc_buf);
 #endif
 
+    for (int i = 0; i < q->nb_extparam_str; i++)
+        av_free(q->extparam_str[i]);
+
+    av_freep(&q->extparam_str);
     av_freep(&q->extparam);
 
     return 0;

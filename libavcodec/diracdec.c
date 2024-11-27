@@ -26,6 +26,7 @@
  * @author Marco Gerards <marco@gnu.org>, David Conrad, Jordi Ortiz <nenjordi@gmail.com>
  */
 
+#include "libavutil/mem.h"
 #include "libavutil/mem_internal.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/thread.h"
@@ -36,13 +37,14 @@
 #include "golomb.h"
 #include "dirac_arith.h"
 #include "dirac_vlc.h"
-#include "mpegpicture.h"
 #include "mpegvideoencdsp.h"
 #include "dirac_dwt.h"
 #include "dirac.h"
 #include "diractab.h"
 #include "diracdsp.h"
 #include "videodsp.h"
+
+#define EDGE_WIDTH 16
 
 /**
  * The spec limits this to 3 for frame coding, but in practice can be as high as 6
@@ -349,7 +351,7 @@ static int alloc_buffers(DiracContext *s, int stride)
     return 0;
 }
 
-static void free_sequence_buffers(DiracContext *s)
+static av_cold void free_sequence_buffers(DiracContext *s)
 {
     int i, j, k;
 
@@ -401,11 +403,8 @@ static av_cold int dirac_decode_init(AVCodecContext *avctx)
 
     for (i = 0; i < MAX_FRAMES; i++) {
         s->all_frames[i].avframe = av_frame_alloc();
-        if (!s->all_frames[i].avframe) {
-            while (i > 0)
-                av_frame_free(&s->all_frames[--i].avframe);
+        if (!s->all_frames[i].avframe)
             return AVERROR(ENOMEM);
-        }
     }
     ret = ff_thread_once(&dirac_arith_init, ff_dirac_init_arith_tables);
     if (ret != 0)
@@ -414,7 +413,7 @@ static av_cold int dirac_decode_init(AVCodecContext *avctx)
     return 0;
 }
 
-static void dirac_decode_flush(AVCodecContext *avctx)
+static av_cold void dirac_decode_flush(AVCodecContext *avctx)
 {
     DiracContext *s = avctx->priv_data;
     free_sequence_buffers(s);
@@ -427,7 +426,9 @@ static av_cold int dirac_decode_end(AVCodecContext *avctx)
     DiracContext *s = avctx->priv_data;
     int i;
 
-    dirac_decode_flush(avctx);
+    // Necessary in case dirac_decode_init() failed
+    if (s->all_frames[MAX_FRAMES - 1].avframe)
+        free_sequence_buffers(s);
     for (i = 0; i < MAX_FRAMES; i++)
         av_frame_free(&s->all_frames[i].avframe);
 
@@ -2103,11 +2104,6 @@ static int get_delayed_pic(DiracContext *s, AVFrame *picture, int *got_frame)
         out->reference ^= DELAYED_PIC_REF;
         if((ret = av_frame_ref(picture, out->avframe)) < 0)
             return ret;
-#if FF_API_FRAME_PICTURE_NUMBER
-FF_DISABLE_DEPRECATION_WARNINGS
-        picture->display_picture_number = out->picture_number;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
         *got_frame = 1;
     }
 
@@ -2350,11 +2346,6 @@ static int dirac_decode_frame(AVCodecContext *avctx, AVFrame *picture,
             if((ret = av_frame_ref(picture, delayed_frame->avframe)) < 0)
                 return ret;
             s->frame_number = delayed_frame->picture_number + 1LL;
-#if FF_API_FRAME_PICTURE_NUMBER
-FF_DISABLE_DEPRECATION_WARNINGS
-            picture->display_picture_number = delayed_frame->picture_number;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
             *got_frame = 1;
         }
     } else if (s->current_picture->picture_number == s->frame_number) {
@@ -2362,11 +2353,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
         if((ret = av_frame_ref(picture, s->current_picture->avframe)) < 0)
             return ret;
         s->frame_number = s->current_picture->picture_number + 1LL;
-#if FF_API_FRAME_PICTURE_NUMBER
-FF_DISABLE_DEPRECATION_WARNINGS
-        picture->display_picture_number = s->current_picture->picture_number;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
         *got_frame = 1;
     }
 
@@ -2384,4 +2370,5 @@ const FFCodec ff_dirac_decoder = {
     FF_CODEC_DECODE_CB(dirac_decode_frame),
     .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_SLICE_THREADS | AV_CODEC_CAP_DR1,
     .flush          = dirac_decode_flush,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
 };

@@ -48,7 +48,7 @@ FATE_VIDEO-$(call FRAMECRC, AVI, AVRN) += fate-avid-interlaced
 fate-avid-interlaced: CMD = framecrc -i $(TARGET_SAMPLES)/avid/avid_ntsc_interlaced.avi
 
 FATE_VIDEO-$(call FRAMECRC, MOV, MJPEG) += fate-avid-meridian
-fate-avid-meridian: CMD = framecrc -i $(TARGET_SAMPLES)/avid/avidmeridianntsc.mov
+fate-avid-meridian: CMD = framecrc -bitexact -i $(TARGET_SAMPLES)/avid/avidmeridianntsc.mov
 
 FATE_VIDEO-$(call FRAMECRC, BETHSOFTVID, BETHSOFTVID, ARESAMPLE_FILTER SCALE_FILTER) += fate-bethsoft-vid
 fate-bethsoft-vid: CMD = framecrc -i $(TARGET_SAMPLES)/bethsoft-vid/ANIM0001.VID -t 5 -pix_fmt rgb24 -vf scale -af aresample
@@ -152,8 +152,21 @@ fate-dxv3-dxt1: CMD = framecrc -i $(TARGET_SAMPLES)/dxv/dxv3-nqna.mov
 FATE_DXV += fate-dxv3-dxt5
 fate-dxv3-dxt5: CMD = framecrc -i $(TARGET_SAMPLES)/dxv/dxv3-nqwa.mov
 
+FATE_DXV += fate-dxv3-ycg6
+fate-dxv3-ycg6: CMD = framecrc -i $(TARGET_SAMPLES)/dxv/dxv3-hqna.mov
+
+FATE_DXV += fate-dxv3-yg10
+fate-dxv3-yg10: CMD = framecrc -i $(TARGET_SAMPLES)/dxv/dxv3-hqwa.mov
+
 FATE_VIDEO-$(call FRAMECRC, MOV, DXV) += $(FATE_DXV)
 fate-dxv: $(FATE_DXV)
+
+fate-dxv3enc%: FMT = $(word 3, $(subst -, ,$(@)))
+fate-dxv3enc%: CMD = framecrc -lavfi testsrc2=duration=1:rate=1:size=1920x1080 -c:v dxv -format $(FMT)
+
+FATE_DXVENC_FMT = dxt1
+FATE_VIDEO-$(call FILTERFRAMECRC, TESTSRC2, DXV_ENCODER) += $(FATE_DXVENC_FMT:%=fate-dxv3enc-%)
+fate-dxvenc: $(FATE_DXVENC_FMT:%=fate-dxv3enc-%)
 
 FATE_VIDEO-$(call FRAMECRC, SEGAFILM, CINEPAK) += fate-film-cvid
 fate-film-cvid: CMD = framecrc -i $(TARGET_SAMPLES)/film/logo-capcom.cpk -an

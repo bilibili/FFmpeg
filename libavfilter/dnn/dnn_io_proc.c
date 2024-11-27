@@ -20,6 +20,7 @@
 
 #include "dnn_io_proc.h"
 #include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 #include "libswscale/swscale.h"
 #include "libavutil/avassert.h"
 #include "libavutil/detection_bbox.h"
@@ -70,7 +71,7 @@ int ff_proc_from_dnn_to_frame(AVFrame *frame, DNNData *output, void *log_ctx)
     dst_data = (void **)frame->data;
     linesize[0] = frame->linesize[0];
     if (output->layout == DL_NCHW) {
-        middle_data = av_malloc(plane_size * output->channels);
+        middle_data = av_malloc(plane_size * output->dims[1]);
         if (!middle_data) {
             ret = AVERROR(ENOMEM);
             goto err;
@@ -209,7 +210,7 @@ int ff_proc_from_frame_to_dnn(AVFrame *frame, DNNData *input, void *log_ctx)
     src_data = (void **)frame->data;
     linesize[0] = frame->linesize[0];
     if (input->layout == DL_NCHW) {
-        middle_data = av_malloc(plane_size * input->channels);
+        middle_data = av_malloc(plane_size * input->dims[1]);
         if (!middle_data) {
             ret = AVERROR(ENOMEM);
             goto err;
@@ -346,9 +347,11 @@ int ff_frame_to_dnn_classify(AVFrame *frame, DNNData *input, uint32_t bbox_index
     int ret = 0;
     enum AVPixelFormat fmt;
     int left, top, width, height;
+    int width_idx, height_idx;
     const AVDetectionBBoxHeader *header;
     const AVDetectionBBox *bbox;
     AVFrameSideData *sd = av_frame_get_side_data(frame, AV_FRAME_DATA_DETECTION_BBOXES);
+    int max_step[4] = { 0 };
     av_assert0(sd);
 
     /* (scale != 1 and scale != 0) or mean != 0 */
@@ -364,6 +367,9 @@ int ff_frame_to_dnn_classify(AVFrame *frame, DNNData *input, uint32_t bbox_index
         return AVERROR(ENOSYS);
     }
 
+    width_idx = dnn_get_width_idx_by_layout(input->layout);
+    height_idx = dnn_get_height_idx_by_layout(input->layout);
+
     header = (const AVDetectionBBoxHeader *)sd->data;
     bbox = av_get_detection_bbox(header, bbox_index);
 
@@ -374,17 +380,20 @@ int ff_frame_to_dnn_classify(AVFrame *frame, DNNData *input, uint32_t bbox_index
 
     fmt = get_pixel_format(input);
     sws_ctx = sws_getContext(width, height, frame->format,
-                             input->width, input->height, fmt,
+                             input->dims[width_idx],
+                             input->dims[height_idx], fmt,
                              SWS_FAST_BILINEAR, NULL, NULL, NULL);
     if (!sws_ctx) {
         av_log(log_ctx, AV_LOG_ERROR, "Failed to create scale context for the conversion "
                "fmt:%s s:%dx%d -> fmt:%s s:%dx%d\n",
                av_get_pix_fmt_name(frame->format), width, height,
-               av_get_pix_fmt_name(fmt), input->width, input->height);
+               av_get_pix_fmt_name(fmt),
+               input->dims[width_idx],
+               input->dims[height_idx]);
         return AVERROR(EINVAL);
     }
 
-    ret = av_image_fill_linesizes(linesizes, fmt, input->width);
+    ret = av_image_fill_linesizes(linesizes, fmt, input->dims[width_idx]);
     if (ret < 0) {
         av_log(log_ctx, AV_LOG_ERROR, "unable to get linesizes with av_image_fill_linesizes");
         sws_freeContext(sws_ctx);
@@ -398,8 +407,9 @@ int ff_frame_to_dnn_classify(AVFrame *frame, DNNData *input, uint32_t bbox_index
     offsety[1] = offsety[2] = AV_CEIL_RSHIFT(top, desc->log2_chroma_h);
     offsety[0] = offsety[3] = top;
 
+    av_image_fill_max_pixsteps(max_step, NULL, desc);
     for (int k = 0; frame->data[k]; k++)
-        bbox_data[k] = frame->data[k] + offsety[k] * frame->linesize[k] + offsetx[k];
+        bbox_data[k] = frame->data[k] + offsety[k] * frame->linesize[k] + offsetx[k] * max_step[k];
 
     sws_scale(sws_ctx, (const uint8_t *const *)&bbox_data, frame->linesize,
                        0, height,
@@ -414,7 +424,7 @@ int ff_frame_to_dnn_detect(AVFrame *frame, DNNData *input, void *log_ctx)
 {
     struct SwsContext *sws_ctx;
     int linesizes[4];
-    int ret = 0;
+    int ret = 0, width_idx, height_idx;
     enum AVPixelFormat fmt = get_pixel_format(input);
 
     /* (scale != 1 and scale != 0) or mean != 0 */
@@ -430,18 +440,23 @@ int ff_frame_to_dnn_detect(AVFrame *frame, DNNData *input, void *log_ctx)
         return AVERROR(ENOSYS);
     }
 
+    width_idx = dnn_get_width_idx_by_layout(input->layout);
+    height_idx = dnn_get_height_idx_by_layout(input->layout);
+
     sws_ctx = sws_getContext(frame->width, frame->height, frame->format,
-                             input->width, input->height, fmt,
+                             input->dims[width_idx],
+                             input->dims[height_idx], fmt,
                              SWS_FAST_BILINEAR, NULL, NULL, NULL);
     if (!sws_ctx) {
         av_log(log_ctx, AV_LOG_ERROR, "Impossible to create scale context for the conversion "
             "fmt:%s s:%dx%d -> fmt:%s s:%dx%d\n",
             av_get_pix_fmt_name(frame->format), frame->width, frame->height,
-            av_get_pix_fmt_name(fmt), input->width, input->height);
+            av_get_pix_fmt_name(fmt), input->dims[width_idx],
+            input->dims[height_idx]);
         return AVERROR(EINVAL);
     }
 
-    ret = av_image_fill_linesizes(linesizes, fmt, input->width);
+    ret = av_image_fill_linesizes(linesizes, fmt, input->dims[width_idx]);
     if (ret < 0) {
         av_log(log_ctx, AV_LOG_ERROR, "unable to get linesizes with av_image_fill_linesizes");
         sws_freeContext(sws_ctx);

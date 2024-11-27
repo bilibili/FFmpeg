@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "libavutil/mem.h"
 #include "avcodec.h"
 #include "nvdec.h"
 #include "decode.h"
@@ -138,11 +139,11 @@ static int nvdec_h264_decode_slice(AVCodecContext *avctx, const uint8_t *buffer,
     const H264SliceContext *sl = &h->slice_ctx[0];
     void *tmp;
 
-    tmp = av_fast_realloc(ctx->bitstream, &ctx->bitstream_allocated,
+    tmp = av_fast_realloc(ctx->bitstream_internal, &ctx->bitstream_allocated,
                           ctx->bitstream_len + size + 3);
     if (!tmp)
         return AVERROR(ENOMEM);
-    ctx->bitstream = tmp;
+    ctx->bitstream = ctx->bitstream_internal = tmp;
 
     tmp = av_fast_realloc(ctx->slice_offsets, &ctx->slice_offsets_allocated,
                           (ctx->nb_slices + 1) * sizeof(*ctx->slice_offsets));
@@ -150,8 +151,8 @@ static int nvdec_h264_decode_slice(AVCodecContext *avctx, const uint8_t *buffer,
         return AVERROR(ENOMEM);
     ctx->slice_offsets = tmp;
 
-    AV_WB24(ctx->bitstream + ctx->bitstream_len, 1);
-    memcpy(ctx->bitstream + ctx->bitstream_len + 3, buffer, size);
+    AV_WB24(ctx->bitstream_internal + ctx->bitstream_len, 1);
+    memcpy(ctx->bitstream_internal + ctx->bitstream_len + 3, buffer, size);
     ctx->slice_offsets[ctx->nb_slices] = ctx->bitstream_len ;
     ctx->bitstream_len += size + 3;
     ctx->nb_slices++;

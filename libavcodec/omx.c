@@ -38,6 +38,7 @@
 #include "libavutil/common.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/log.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 
 #include "avcodec.h"
@@ -920,10 +921,10 @@ static const AVOption options[] = {
     { "omx_libname", "OpenMAX library name", OFFSET(libname), AV_OPT_TYPE_STRING, { 0 }, 0, 0, VDE },
     { "omx_libprefix", "OpenMAX library prefix", OFFSET(libprefix), AV_OPT_TYPE_STRING, { 0 }, 0, 0, VDE },
     { "zerocopy", "Try to avoid copying input frames if possible", OFFSET(input_zerocopy), AV_OPT_TYPE_INT, { .i64 = CONFIG_OMX_RPI }, 0, 1, VE },
-    { "profile",  "Set the encoding profile", OFFSET(profile), AV_OPT_TYPE_INT,   { .i64 = AV_PROFILE_UNKNOWN },       AV_PROFILE_UNKNOWN, AV_PROFILE_H264_HIGH, VE, "profile" },
-    { "baseline", "",                         0,               AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_BASELINE }, 0, 0, VE, "profile" },
-    { "main",     "",                         0,               AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_MAIN },     0, 0, VE, "profile" },
-    { "high",     "",                         0,               AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_HIGH },     0, 0, VE, "profile" },
+    { "profile",  "Set the encoding profile", OFFSET(profile), AV_OPT_TYPE_INT,   { .i64 = AV_PROFILE_UNKNOWN },       AV_PROFILE_UNKNOWN, AV_PROFILE_H264_HIGH, VE, .unit = "profile" },
+    { "baseline", "",                         0,               AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_BASELINE }, 0, 0, VE, .unit = "profile" },
+    { "main",     "",                         0,               AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_MAIN },     0, 0, VE, .unit = "profile" },
+    { "high",     "",                         0,               AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_HIGH },     0, 0, VE, .unit = "profile" },
     { NULL }
 };
 
@@ -947,6 +948,7 @@ const FFCodec ff_mpeg4_omx_encoder = {
     FF_CODEC_ENCODE_CB(omx_encode_frame),
     .close            = omx_encode_end,
     .p.pix_fmts       = omx_encoder_pix_fmts,
+    .color_ranges     = AVCOL_RANGE_MPEG,
     .p.capabilities   = AV_CODEC_CAP_DELAY,
     .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
     .p.priv_class     = &omx_mpeg4enc_class,
@@ -968,6 +970,7 @@ const FFCodec ff_h264_omx_encoder = {
     FF_CODEC_ENCODE_CB(omx_encode_frame),
     .close            = omx_encode_end,
     .p.pix_fmts       = omx_encoder_pix_fmts,
+    .color_ranges     = AVCOL_RANGE_MPEG, /* FIXME: implement tagging */
     .p.capabilities   = AV_CODEC_CAP_DELAY,
     .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
     .p.priv_class     = &omx_h264enc_class,

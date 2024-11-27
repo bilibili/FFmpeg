@@ -31,6 +31,7 @@
 #include "avc.h"
 #include "url.h"
 
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/avstring.h"
 #include "libavutil/mathematics.h"
@@ -75,11 +76,7 @@ typedef struct SmoothStreamingContext {
     int nb_fragments;
 } SmoothStreamingContext;
 
-#if FF_API_AVIO_WRITE_NONCONST
-static int ism_write(void *opaque, uint8_t *buf, int buf_size)
-#else
 static int ism_write(void *opaque, const uint8_t *buf, int buf_size)
-#endif
 {
     OutputStream *os = opaque;
     if (os->out)

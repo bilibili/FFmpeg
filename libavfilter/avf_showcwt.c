@@ -21,9 +21,8 @@
 #include <float.h>
 #include <math.h>
 
+#include "libavutil/mem.h"
 #include "libavutil/tx.h"
-#include "libavutil/avassert.h"
-#include "libavutil/avstring.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/float_dsp.h"
 #include "libavutil/cpu.h"
@@ -34,7 +33,6 @@
 #include "video.h"
 #include "avfilter.h"
 #include "filters.h"
-#include "internal.h"
 
 enum FrequencyScale {
     FSCALE_LINEAR,
@@ -45,6 +43,7 @@ enum FrequencyScale {
     FSCALE_SQRT,
     FSCALE_CBRT,
     FSCALE_QDRT,
+    FSCALE_FM,
     NB_FSCALE
 };
 
@@ -122,6 +121,7 @@ typedef struct ShowCWTContext {
     float deviation;
     float bar_ratio;
     int bar_size;
+    int sono_size;
     float rotation;
 
     AVFloatDSPContext *fdsp;
@@ -135,21 +135,22 @@ static const AVOption showcwt_options[] = {
     { "s",    "set video size", OFFSET(w), AV_OPT_TYPE_IMAGE_SIZE, {.str = "640x512"}, 0, 0, FLAGS },
     { "rate", "set video rate",  OFFSET(rate_str), AV_OPT_TYPE_STRING, {.str = "25"}, 0, 0, FLAGS },
     { "r",    "set video rate",  OFFSET(rate_str), AV_OPT_TYPE_STRING, {.str = "25"}, 0, 0, FLAGS },
-    { "scale", "set frequency scale", OFFSET(frequency_scale), AV_OPT_TYPE_INT,  {.i64=0}, 0, NB_FSCALE-1, FLAGS, "scale" },
-    {  "linear",  "linear",           0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_LINEAR}, 0, 0, FLAGS, "scale" },
-    {  "log",     "logarithmic",      0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_LOG},    0, 0, FLAGS, "scale" },
-    {  "bark",    "bark",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_BARK},   0, 0, FLAGS, "scale" },
-    {  "mel",     "mel",              0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_MEL},    0, 0, FLAGS, "scale" },
-    {  "erbs",    "erbs",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_ERBS},   0, 0, FLAGS, "scale" },
-    {  "sqrt",    "sqrt",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_SQRT},   0, 0, FLAGS, "scale" },
-    {  "cbrt",    "cbrt",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_CBRT},   0, 0, FLAGS, "scale" },
-    {  "qdrt",    "qdrt",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_QDRT},   0, 0, FLAGS, "scale" },
-    { "iscale", "set intensity scale", OFFSET(intensity_scale),AV_OPT_TYPE_INT,  {.i64=0},   0, NB_ISCALE-1, FLAGS, "iscale" },
-    {  "linear",  "linear",           0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_LINEAR}, 0, 0, FLAGS, "iscale" },
-    {  "log",     "logarithmic",      0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_LOG},    0, 0, FLAGS, "iscale" },
-    {  "sqrt",    "sqrt",             0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_SQRT},   0, 0, FLAGS, "iscale" },
-    {  "cbrt",    "cbrt",             0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_CBRT},   0, 0, FLAGS, "iscale" },
-    {  "qdrt",    "qdrt",             0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_QDRT},   0, 0, FLAGS, "iscale" },
+    { "scale", "set frequency scale", OFFSET(frequency_scale), AV_OPT_TYPE_INT,  {.i64=0}, 0, NB_FSCALE-1, FLAGS, .unit = "scale" },
+    {  "linear",  "linear",           0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_LINEAR}, 0, 0, FLAGS, .unit = "scale" },
+    {  "log",     "logarithmic",      0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_LOG},    0, 0, FLAGS, .unit = "scale" },
+    {  "bark",    "bark",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_BARK},   0, 0, FLAGS, .unit = "scale" },
+    {  "mel",     "mel",              0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_MEL},    0, 0, FLAGS, .unit = "scale" },
+    {  "erbs",    "erbs",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_ERBS},   0, 0, FLAGS, .unit = "scale" },
+    {  "sqrt",    "sqrt",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_SQRT},   0, 0, FLAGS, .unit = "scale" },
+    {  "cbrt",    "cbrt",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_CBRT},   0, 0, FLAGS, .unit = "scale" },
+    {  "qdrt",    "qdrt",             0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_QDRT},   0, 0, FLAGS, .unit = "scale" },
+    {  "fm",      "fm",               0,                       AV_OPT_TYPE_CONST,{.i64=FSCALE_FM},     0, 0, FLAGS, .unit = "scale" },
+    { "iscale", "set intensity scale", OFFSET(intensity_scale),AV_OPT_TYPE_INT,  {.i64=0},   0, NB_ISCALE-1, FLAGS, .unit = "iscale" },
+    {  "linear",  "linear",           0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_LINEAR}, 0, 0, FLAGS, .unit = "iscale" },
+    {  "log",     "logarithmic",      0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_LOG},    0, 0, FLAGS, .unit = "iscale" },
+    {  "sqrt",    "sqrt",             0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_SQRT},   0, 0, FLAGS, .unit = "iscale" },
+    {  "cbrt",    "cbrt",             0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_CBRT},   0, 0, FLAGS, .unit = "iscale" },
+    {  "qdrt",    "qdrt",             0,                       AV_OPT_TYPE_CONST,{.i64=ISCALE_QDRT},   0, 0, FLAGS, .unit = "iscale" },
     { "min",  "set minimum frequency", OFFSET(minimum_frequency), AV_OPT_TYPE_FLOAT, {.dbl = 20.},    1, 192000, FLAGS },
     { "max",  "set maximum frequency", OFFSET(maximum_frequency), AV_OPT_TYPE_FLOAT, {.dbl = 20000.}, 1, 192000, FLAGS },
     { "imin", "set minimum intensity", OFFSET(minimum_intensity), AV_OPT_TYPE_FLOAT, {.dbl = 0.}, 0, 1, FLAGS },
@@ -157,22 +158,22 @@ static const AVOption showcwt_options[] = {
     { "logb", "set logarithmic basis", OFFSET(logarithmic_basis), AV_OPT_TYPE_FLOAT, {.dbl = 0.0001}, 0, 1, FLAGS },
     { "deviation", "set frequency deviation", OFFSET(deviation), AV_OPT_TYPE_FLOAT, {.dbl = 1.}, 0, 100, FLAGS },
     { "pps",  "set pixels per second", OFFSET(pps), AV_OPT_TYPE_INT, {.i64 = 64}, 1, 1024, FLAGS },
-    { "mode", "set output mode", OFFSET(mode), AV_OPT_TYPE_INT,  {.i64=0}, 0, 4, FLAGS, "mode" },
-    {  "magnitude", "magnitude",         0, AV_OPT_TYPE_CONST,{.i64=0}, 0, 0, FLAGS, "mode" },
-    {  "phase",     "phase",             0, AV_OPT_TYPE_CONST,{.i64=1}, 0, 0, FLAGS, "mode" },
-    {  "magphase",  "magnitude+phase",   0, AV_OPT_TYPE_CONST,{.i64=2}, 0, 0, FLAGS, "mode" },
-    {  "channel",   "color per channel", 0, AV_OPT_TYPE_CONST,{.i64=3}, 0, 0, FLAGS, "mode" },
-    {  "stereo",    "stereo difference", 0, AV_OPT_TYPE_CONST,{.i64=4}, 0, 0, FLAGS, "mode" },
-    { "slide", "set slide mode", OFFSET(slide), AV_OPT_TYPE_INT,  {.i64=0}, 0, NB_SLIDE-1, FLAGS, "slide" },
-    {  "replace", "replace", 0, AV_OPT_TYPE_CONST,{.i64=SLIDE_REPLACE},0, 0, FLAGS, "slide" },
-    {  "scroll",  "scroll",  0, AV_OPT_TYPE_CONST,{.i64=SLIDE_SCROLL}, 0, 0, FLAGS, "slide" },
-    {  "frame",   "frame",   0, AV_OPT_TYPE_CONST,{.i64=SLIDE_FRAME},  0, 0, FLAGS, "slide" },
-    { "direction", "set direction mode", OFFSET(direction), AV_OPT_TYPE_INT,  {.i64=0}, 0, NB_DIRECTION-1, FLAGS, "direction" },
-    {  "lr", "left to right", 0, AV_OPT_TYPE_CONST,{.i64=DIRECTION_LR}, 0, 0, FLAGS, "direction" },
-    {  "rl", "right to left", 0, AV_OPT_TYPE_CONST,{.i64=DIRECTION_RL}, 0, 0, FLAGS, "direction" },
-    {  "ud", "up to down",    0, AV_OPT_TYPE_CONST,{.i64=DIRECTION_UD}, 0, 0, FLAGS, "direction" },
-    {  "du", "down to up",    0, AV_OPT_TYPE_CONST,{.i64=DIRECTION_DU}, 0, 0, FLAGS, "direction" },
-    { "bar", "set bar ratio", OFFSET(bar_ratio), AV_OPT_TYPE_FLOAT, {.dbl = 0.}, 0, 1, FLAGS },
+    { "mode", "set output mode", OFFSET(mode), AV_OPT_TYPE_INT,  {.i64=0}, 0, 4, FLAGS, .unit = "mode" },
+    {  "magnitude", "magnitude",         0, AV_OPT_TYPE_CONST,{.i64=0}, 0, 0, FLAGS, .unit = "mode" },
+    {  "phase",     "phase",             0, AV_OPT_TYPE_CONST,{.i64=1}, 0, 0, FLAGS, .unit = "mode" },
+    {  "magphase",  "magnitude+phase",   0, AV_OPT_TYPE_CONST,{.i64=2}, 0, 0, FLAGS, .unit = "mode" },
+    {  "channel",   "color per channel", 0, AV_OPT_TYPE_CONST,{.i64=3}, 0, 0, FLAGS, .unit = "mode" },
+    {  "stereo",    "stereo difference", 0, AV_OPT_TYPE_CONST,{.i64=4}, 0, 0, FLAGS, .unit = "mode" },
+    { "slide", "set slide mode", OFFSET(slide), AV_OPT_TYPE_INT,  {.i64=0}, 0, NB_SLIDE-1, FLAGS, .unit = "slide" },
+    {  "replace", "replace", 0, AV_OPT_TYPE_CONST,{.i64=SLIDE_REPLACE},0, 0, FLAGS, .unit = "slide" },
+    {  "scroll",  "scroll",  0, AV_OPT_TYPE_CONST,{.i64=SLIDE_SCROLL}, 0, 0, FLAGS, .unit = "slide" },
+    {  "frame",   "frame",   0, AV_OPT_TYPE_CONST,{.i64=SLIDE_FRAME},  0, 0, FLAGS, .unit = "slide" },
+    { "direction", "set direction mode", OFFSET(direction), AV_OPT_TYPE_INT,  {.i64=0}, 0, NB_DIRECTION-1, FLAGS, .unit = "direction" },
+    {  "lr", "left to right", 0, AV_OPT_TYPE_CONST,{.i64=DIRECTION_LR}, 0, 0, FLAGS, .unit = "direction" },
+    {  "rl", "right to left", 0, AV_OPT_TYPE_CONST,{.i64=DIRECTION_RL}, 0, 0, FLAGS, .unit = "direction" },
+    {  "ud", "up to down",    0, AV_OPT_TYPE_CONST,{.i64=DIRECTION_UD}, 0, 0, FLAGS, .unit = "direction" },
+    {  "du", "down to up",    0, AV_OPT_TYPE_CONST,{.i64=DIRECTION_DU}, 0, 0, FLAGS, .unit = "direction" },
+    { "bar", "set bargraph ratio", OFFSET(bar_ratio), AV_OPT_TYPE_FLOAT, {.dbl = 0.}, 0, 1, FLAGS },
     { "rotation", "set color rotation", OFFSET(rotation), AV_OPT_TYPE_FLOAT, {.dbl = 0}, -1, 1, FLAGS },
     { NULL }
 };
@@ -292,6 +293,10 @@ static float frequency_band(float *frequency_band,
             frequency = frequency * frequency * frequency * frequency;
             frequency_derivative *= 4.f * powf(frequency, 3.f / 4.f);
             break;
+        case FSCALE_FM:
+            frequency = 2.f * powf(frequency, 3.f / 2.f) / 3.f;
+            frequency_derivative *= sqrtf(frequency);
+            break;
         }
 
         frequency_band[y*2  ] = frequency;
@@ -388,55 +393,56 @@ static void draw_bar(ShowCWTContext *s, int y,
     const ptrdiff_t ulinesize = s->outpicref->linesize[1];
     const ptrdiff_t vlinesize = s->outpicref->linesize[2];
     const int direction = s->direction;
+    const int sono_size = s->sono_size;
     const int bar_size = s->bar_size;
     const float rcp_bar_h = 1.f / bar_size;
     uint8_t *dstY, *dstU, *dstV;
-    const int w_1 = s->w - 1;
+    const int w = s->w;
 
     bh[0] = 1.f / (Y + 0.0001f);
     switch (direction) {
-        case DIRECTION_LR:
-            dstY = s->outpicref->data[0] + y * ylinesize;
-            dstU = s->outpicref->data[1] + y * ulinesize;
-            dstV = s->outpicref->data[2] + y * vlinesize;
-            for (int x = 0; x < bar_size; x++) {
-                float ht = (bar_size - x) * rcp_bar_h;
-                DRAW_BAR_COLOR(x);
-            }
-            break;
-        case DIRECTION_RL:
-            dstY = s->outpicref->data[0] + y * ylinesize;
-            dstU = s->outpicref->data[1] + y * ulinesize;
-            dstV = s->outpicref->data[2] + y * vlinesize;
-            for (int x = 0; x < bar_size; x++) {
-                float ht = x * rcp_bar_h;
-                DRAW_BAR_COLOR(w_1 - bar_size + x);
-            }
-            break;
-        case DIRECTION_UD:
-            dstY = s->outpicref->data[0] + w_1 - y;
-            dstU = s->outpicref->data[1] + w_1 - y;
-            dstV = s->outpicref->data[2] + w_1 - y;
-            for (int x = 0; x < bar_size; x++) {
-                float ht = (bar_size - x) * rcp_bar_h;
-                DRAW_BAR_COLOR(0);
-                dstY += ylinesize;
-                dstU += ulinesize;
-                dstV += vlinesize;
-            }
-            break;
-        case DIRECTION_DU:
-            dstY = s->outpicref->data[0] + w_1 - y + ylinesize * (s->h - 1 - bar_size);
-            dstU = s->outpicref->data[1] + w_1 - y + ulinesize * (s->h - 1 - bar_size);
-            dstV = s->outpicref->data[2] + w_1 - y + vlinesize * (s->h - 1 - bar_size);
-            for (int x = 0; x < bar_size; x++) {
-                float ht = x * rcp_bar_h;
-                DRAW_BAR_COLOR(0);
-                dstY += ylinesize;
-                dstU += ulinesize;
-                dstV += vlinesize;
-            }
-            break;
+    case DIRECTION_LR:
+        dstY = s->outpicref->data[0] + y * ylinesize;
+        dstU = s->outpicref->data[1] + y * ulinesize;
+        dstV = s->outpicref->data[2] + y * vlinesize;
+        for (int x = 0; x < bar_size; x++) {
+            float ht = (bar_size - x) * rcp_bar_h;
+            DRAW_BAR_COLOR(x);
+        }
+        break;
+    case DIRECTION_RL:
+        dstY = s->outpicref->data[0] + y * ylinesize;
+        dstU = s->outpicref->data[1] + y * ulinesize;
+        dstV = s->outpicref->data[2] + y * vlinesize;
+        for (int x = 0; x < bar_size; x++) {
+            float ht = x * rcp_bar_h;
+            DRAW_BAR_COLOR(w - bar_size + x);
+        }
+        break;
+    case DIRECTION_UD:
+        dstY = s->outpicref->data[0] + w - 1 - y;
+        dstU = s->outpicref->data[1] + w - 1 - y;
+        dstV = s->outpicref->data[2] + w - 1 - y;
+        for (int x = 0; x < bar_size; x++) {
+            float ht = (bar_size - x) * rcp_bar_h;
+            DRAW_BAR_COLOR(0);
+            dstY += ylinesize;
+            dstU += ulinesize;
+            dstV += vlinesize;
+        }
+        break;
+    case DIRECTION_DU:
+        dstY = s->outpicref->data[0] + w - 1 - y + ylinesize * sono_size;
+        dstU = s->outpicref->data[1] + w - 1 - y + ulinesize * sono_size;
+        dstV = s->outpicref->data[2] + w - 1 - y + vlinesize * sono_size;
+        for (int x = 0; x < bar_size; x++) {
+            float ht = x * rcp_bar_h;
+            DRAW_BAR_COLOR(0);
+            dstY += ylinesize;
+            dstU += ulinesize;
+            dstV += vlinesize;
+        }
+        break;
     }
 }
 
@@ -458,6 +464,7 @@ static int draw(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
     const float rotation = s->rotation;
     const int direction = s->direction;
     uint8_t *dstY, *dstU, *dstV, *dstA;
+    const int sono_size = s->sono_size;
     const int bar_size = s->bar_size;
     const int mode = s->mode;
     const int w_1 = s->w - 1;
@@ -467,6 +474,9 @@ static int draw(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
     for (int y = start; y < end; y++) {
         const AVComplexFloat *src = ((const AVComplexFloat *)s->ch_out->extended_data[y]) +
                                                     0 * ihop_size + ihop_index;
+
+        if (sono_size <= 0)
+            goto skip;
 
         switch (direction) {
         case DIRECTION_LR:
@@ -518,6 +528,7 @@ static int draw(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
             if (dstA != NULL)
                 dstA += x;
         }
+skip:
 
         switch (mode) {
         case 4:
@@ -543,11 +554,13 @@ static int draw(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
                 U  = 0.5f + 0.5f * z * u;
                 V  = 0.5f + 0.5f * z * v;
 
-                dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
-                dstU[0] = av_clip_uint8(lrintf(U * 255.f));
-                dstV[0] = av_clip_uint8(lrintf(V * 255.f));
-                if (dstA)
-                    dstA[0] = dstY[0];
+                if (sono_size > 0) {
+                    dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
+                    dstU[0] = av_clip_uint8(lrintf(U * 255.f));
+                    dstV[0] = av_clip_uint8(lrintf(V * 255.f));
+                    if (dstA)
+                        dstA[0] = dstY[0];
+                }
 
                 if (bar_size > 0)
                     draw_bar(s, y, Y, U, V);
@@ -572,11 +585,13 @@ static int draw(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
                     V += z * yf * cosf(2.f * M_PI * (ch * yf + rotation));
                 }
 
-                dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
-                dstU[0] = av_clip_uint8(lrintf(U * 255.f));
-                dstV[0] = av_clip_uint8(lrintf(V * 255.f));
-                if (dstA)
-                    dstA[0] = dstY[0];
+                if (sono_size > 0) {
+                    dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
+                    dstU[0] = av_clip_uint8(lrintf(U * 255.f));
+                    dstV[0] = av_clip_uint8(lrintf(V * 255.f));
+                    if (dstA)
+                        dstA[0] = dstY[0];
+                }
 
                 if (bar_size > 0)
                     draw_bar(s, y, Y, U, V);
@@ -589,11 +604,14 @@ static int draw(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
             U = 0.5f + 0.5f * U * Y / M_PI;
             V = 1.f - U;
 
-            dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
-            dstU[0] = av_clip_uint8(lrintf(U * 255.f));
-            dstV[0] = av_clip_uint8(lrintf(V * 255.f));
-            if (dstA)
-                dstA[0] = dstY[0];
+            if (sono_size > 0) {
+                dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
+                dstU[0] = av_clip_uint8(lrintf(U * 255.f));
+                dstV[0] = av_clip_uint8(lrintf(V * 255.f));
+                if (dstA)
+                    dstA[0] = dstY[0];
+            }
+
             if (bar_size > 0)
                 draw_bar(s, y, Y, U, V);
             break;
@@ -601,9 +619,12 @@ static int draw(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
             Y = atan2f(src[0].im, src[0].re);
             Y = 0.5f + 0.5f * Y / M_PI;
 
-            dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
-            if (dstA)
-                dstA[0] = dstY[0];
+            if (sono_size > 0) {
+                dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
+                if (dstA)
+                    dstA[0] = dstY[0];
+            }
+
             if (bar_size > 0)
                 draw_bar(s, y, Y, 0.5f, 0.5f);
             break;
@@ -611,9 +632,11 @@ static int draw(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
             Y = hypotf(src[0].re, src[0].im);
             Y = remap_log(s, Y, iscale, log_factor);
 
-            dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
-            if (dstA)
-                dstA[0] = dstY[0];
+            if (sono_size > 0) {
+                dstY[0] = av_clip_uint8(lrintf(Y * 255.f));
+                if (dstA)
+                    dstA[0] = dstY[0];
+            }
 
             if (bar_size > 0)
                 draw_bar(s, y, Y, 0.5f, 0.5f);
@@ -666,8 +689,9 @@ static int run_channel_cwt(AVFilterContext *ctx, void *arg, int jobnr, int nb_jo
 
         memset(isrc, 0, sizeof(*isrc) * output_padding_size);
         if (offset == 0) {
+            const unsigned *kindex = index + kernel_start;
             for (int i = 0; i < kernel_range; i++) {
-                const unsigned n = index[i + kernel_start];
+                const unsigned n = kindex[i];
 
                 isrc[n].re += dstx[i].re;
                 isrc[n].im += dstx[i].im;
@@ -785,10 +809,12 @@ static int compute_kernel(AVFilterContext *ctx)
 
 static int config_output(AVFilterLink *outlink)
 {
+    FilterLink *l = ff_filter_link(outlink);
     AVFilterContext *ctx = outlink->src;
     AVFilterLink *inlink = ctx->inputs[0];
     ShowCWTContext *s = ctx->priv;
-    float maximum_frequency = fminf(s->maximum_frequency, inlink->sample_rate * 0.5f);
+    const float limit_frequency = inlink->sample_rate * 0.5f;
+    float maximum_frequency = fminf(s->maximum_frequency, limit_frequency);
     float minimum_frequency = s->minimum_frequency;
     float scale = 1.f, factor;
     int ret;
@@ -809,11 +835,13 @@ static int config_output(AVFilterLink *outlink)
     case DIRECTION_LR:
     case DIRECTION_RL:
         s->bar_size = s->w * s->bar_ratio;
+        s->sono_size = s->w - s->bar_size;
         s->frequency_band_count = s->h;
         break;
     case DIRECTION_UD:
     case DIRECTION_DU:
         s->bar_size = s->h * s->bar_ratio;
+        s->sono_size = s->h - s->bar_size;
         s->frequency_band_count = s->w;
         break;
     }
@@ -846,6 +874,10 @@ static int config_output(AVFilterLink *outlink)
     case FSCALE_QDRT:
         minimum_frequency = powf(minimum_frequency, 0.25f);
         maximum_frequency = powf(maximum_frequency, 0.25f);
+        break;
+    case FSCALE_FM:
+        minimum_frequency = powf(9.f * (minimum_frequency * minimum_frequency) / 4.f, 1.f / 3.f);
+        maximum_frequency = powf(9.f * (maximum_frequency * maximum_frequency) / 4.f, 1.f / 3.f);
         break;
     }
 
@@ -984,27 +1016,25 @@ static int config_output(AVFilterLink *outlink)
 
     switch (s->direction) {
     case DIRECTION_LR:
-        s->pos = s->bar_size;
-        break;
-    case DIRECTION_RL:
-        s->pos = FFMAX(0, s->w - 2 - s->bar_size);
-        break;
     case DIRECTION_UD:
         s->pos = s->bar_size;
         break;
+    case DIRECTION_RL:
     case DIRECTION_DU:
-        s->pos = FFMAX(0, s->h - 2 - s->bar_size);
+        s->pos = s->sono_size;
         break;
     }
 
     s->auto_frame_rate = av_make_q(inlink->sample_rate, s->hop_size);
     if (strcmp(s->rate_str, "auto")) {
         ret = av_parse_video_rate(&s->frame_rate, s->rate_str);
+        if (ret < 0)
+            return ret;
     } else {
         s->frame_rate = s->auto_frame_rate;
     }
-    outlink->frame_rate = s->frame_rate;
-    outlink->time_base = av_inv_q(outlink->frame_rate);
+    l->frame_rate = s->frame_rate;
+    outlink->time_base = av_inv_q(l->frame_rate);
 
     ret = compute_kernel(ctx);
     if (ret < 0)
@@ -1039,7 +1069,7 @@ static int output_frame(AVFilterContext *ctx)
             for (int p = 0; p < nb_planes; p++) {
                 ptrdiff_t linesize = s->outpicref->linesize[p];
 
-                for (int y = 0; y < s->h - 2 - s->bar_size; y++) {
+                for (int y = 0; y < s->sono_size; y++) {
                     uint8_t *dst = s->outpicref->data[p] + y * linesize;
 
                     memmove(dst, dst + linesize, s->w);
@@ -1066,7 +1096,7 @@ static int output_frame(AVFilterContext *ctx)
         case DIRECTION_RL:
             s->pos--;
             if (s->pos < 0) {
-                s->pos = FFMAX(0, s->w - 2 - s->bar_size);
+                s->pos = s->sono_size;
                 s->new_frame = 1;
             }
             break;
@@ -1080,7 +1110,7 @@ static int output_frame(AVFilterContext *ctx)
         case DIRECTION_DU:
             s->pos--;
             if (s->pos < 0) {
-                s->pos = FFMAX(0, s->h - 2 - s->bar_size);
+                s->pos = s->sono_size;
                 s->new_frame = 1;
             }
             break;
@@ -1093,10 +1123,8 @@ static int output_frame(AVFilterContext *ctx)
             s->pos = s->bar_size;
             break;
         case DIRECTION_RL:
-            s->pos = FFMAX(0, s->w - 2 - s->bar_size);
-            break;
         case DIRECTION_DU:
-            s->pos = FFMAX(0, s->h - 2 - s->bar_size);
+            s->pos = s->sono_size;
             break;
         }
         break;
@@ -1236,8 +1264,11 @@ static int activate(AVFilterContext *ctx)
                 ff_filter_execute(ctx, run_channels_cwt_prepare, fin, NULL,
                                   FFMIN(s->nb_threads, s->nb_channels));
                 if (fin) {
-                    if (s->hop_index == 0)
+                    if (s->hop_index == 0) {
                         s->in_pts = fin->pts;
+                        if (s->old_pts == AV_NOPTS_VALUE)
+                            s->old_pts = av_rescale_q(s->in_pts, inlink->time_base, outlink->time_base) - 1;
+                    }
                     s->hop_index += fin->nb_samples;
                     av_frame_free(&fin);
                 } else {

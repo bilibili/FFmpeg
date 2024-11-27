@@ -31,6 +31,7 @@
 
 #include "libavutil/imgutils.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "libavutil/thread.h"
 #include "avcodec.h"
 #include "codec_internal.h"
@@ -170,6 +171,9 @@ static av_cold int allocate_frame_buffers(Indeo3DecodeContext *ctx,
     int p, chroma_width, chroma_height;
     int luma_size, chroma_size;
     ptrdiff_t luma_pitch, chroma_pitch;
+
+    luma_width  = FFALIGN(luma_width , 2);
+    luma_height = FFALIGN(luma_height, 2);
 
     if (luma_width  < 16 || luma_width  > 640 ||
         luma_height < 16 || luma_height > 480 ||

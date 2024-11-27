@@ -30,6 +30,7 @@
 #include "libavutil/cuda_check.h"
 #include "libavutil/fifo.h"
 #include "libavutil/log.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 
@@ -833,22 +834,39 @@ static av_cold int cuvid_decode_init(AVCodecContext *avctx)
     int ret = 0;
 
     enum AVPixelFormat pix_fmts[3] = { AV_PIX_FMT_CUDA,
-                                       AV_PIX_FMT_NV12,
+                                       AV_PIX_FMT_NONE,
                                        AV_PIX_FMT_NONE };
 
     int probed_width = avctx->coded_width ? avctx->coded_width : 1280;
     int probed_height = avctx->coded_height ? avctx->coded_height : 720;
-    int probed_bit_depth = 8;
+    int probed_bit_depth = 8, is_yuv444 = 0;
 
     const AVPixFmtDescriptor *probe_desc = av_pix_fmt_desc_get(avctx->pix_fmt);
     if (probe_desc && probe_desc->nb_components)
         probed_bit_depth = probe_desc->comp[0].depth;
 
+    if (probe_desc && !probe_desc->log2_chroma_w && !probe_desc->log2_chroma_h)
+        is_yuv444 = 1;
+
+    // Pick pixel format based on bit depth and chroma sampling.
+    // Only 420 and 444 sampling are supported by HW so far, no need to check for 422.
+    switch (probed_bit_depth) {
+    case 10:
+        pix_fmts[1] = is_yuv444 ? AV_PIX_FMT_YUV444P16 : AV_PIX_FMT_P010;
+        break;
+    case 12:
+        pix_fmts[1] = is_yuv444 ? AV_PIX_FMT_YUV444P16 : AV_PIX_FMT_P016;
+        break;
+    default:
+        pix_fmts[1] = is_yuv444 ? AV_PIX_FMT_YUV444P : AV_PIX_FMT_NV12;
+        break;
+    }
+
     ctx->pkt = avctx->internal->in_pkt;
     // Accelerated transcoding scenarios with 'ffmpeg' require that the
     // pix_fmt be set to AV_PIX_FMT_CUDA early. The sw_pix_fmt, and the
     // pix_fmt for non-accelerated transcoding, do not need to be correct
-    // but need to be set to something. We arbitrarily pick NV12.
+    // but need to be set to something.
     ret = ff_get_format(avctx, pix_fmts);
     if (ret < 0) {
         av_log(avctx, AV_LOG_ERROR, "ff_get_format failed: %d\n", ret);
@@ -1127,10 +1145,10 @@ static void cuvid_flush(AVCodecContext *avctx)
 #define OFFSET(x) offsetof(CuvidContext, x)
 #define VD AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
 static const AVOption options[] = {
-    { "deint",    "Set deinterlacing mode", OFFSET(deint_mode), AV_OPT_TYPE_INT,   { .i64 = cudaVideoDeinterlaceMode_Weave    }, cudaVideoDeinterlaceMode_Weave, cudaVideoDeinterlaceMode_Adaptive, VD, "deint" },
-    { "weave",    "Weave deinterlacing (do nothing)",        0, AV_OPT_TYPE_CONST, { .i64 = cudaVideoDeinterlaceMode_Weave    }, 0, 0, VD, "deint" },
-    { "bob",      "Bob deinterlacing",                       0, AV_OPT_TYPE_CONST, { .i64 = cudaVideoDeinterlaceMode_Bob      }, 0, 0, VD, "deint" },
-    { "adaptive", "Adaptive deinterlacing",                  0, AV_OPT_TYPE_CONST, { .i64 = cudaVideoDeinterlaceMode_Adaptive }, 0, 0, VD, "deint" },
+    { "deint",    "Set deinterlacing mode", OFFSET(deint_mode), AV_OPT_TYPE_INT,   { .i64 = cudaVideoDeinterlaceMode_Weave    }, cudaVideoDeinterlaceMode_Weave, cudaVideoDeinterlaceMode_Adaptive, VD, .unit = "deint" },
+    { "weave",    "Weave deinterlacing (do nothing)",        0, AV_OPT_TYPE_CONST, { .i64 = cudaVideoDeinterlaceMode_Weave    }, 0, 0, VD, .unit = "deint" },
+    { "bob",      "Bob deinterlacing",                       0, AV_OPT_TYPE_CONST, { .i64 = cudaVideoDeinterlaceMode_Bob      }, 0, 0, VD, .unit = "deint" },
+    { "adaptive", "Adaptive deinterlacing",                  0, AV_OPT_TYPE_CONST, { .i64 = cudaVideoDeinterlaceMode_Adaptive }, 0, 0, VD, .unit = "deint" },
     { "gpu",      "GPU to be used for decoding", OFFSET(cu_gpu), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
     { "surfaces", "Maximum surfaces to be used for decoding", OFFSET(nb_surfaces), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, VD | AV_OPT_FLAG_DEPRECATED },
     { "drop_second_field", "Drop second field when deinterlacing", OFFSET(drop_second_field), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VD },
@@ -1174,11 +1192,6 @@ static const AVCodecHWConfigInternal *const cuvid_hw_configs[] = {
         .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING | AV_CODEC_CAP_HARDWARE, \
         .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE | \
                           FF_CODEC_CAP_SETS_FRAME_PROPS, \
-        .p.pix_fmts     = (const enum AVPixelFormat[]){ AV_PIX_FMT_CUDA, \
-                                                        AV_PIX_FMT_NV12, \
-                                                        AV_PIX_FMT_P010, \
-                                                        AV_PIX_FMT_P016, \
-                                                        AV_PIX_FMT_NONE }, \
         .hw_configs     = cuvid_hw_configs, \
         .p.wrapper_name = "cuvid", \
     };

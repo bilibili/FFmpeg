@@ -26,7 +26,9 @@ The General Assembly is sovereign and legitimate for all its decisions regarding
 
 The General Assembly is made up of active contributors.
 
-Contributors are considered "active contributors" if they have pushed more than 20 patches in the last 36 months in the main FFmpeg repository, or if they have been voted in by the GA.
+Contributors are considered "active contributors" if they have authored more than 20 patches in the last 36 months in the main FFmpeg repository, or if they have been voted in by the GA.
+
+The list of active contributors is updated twice each year, on 1st January and 1st July, 0:00 UTC.
 
 Additional members are added to the General Assembly through a vote after proposal by a member of the General Assembly. They are part of the GA for two years, after which they need a confirmation by the GA.
 
@@ -80,8 +82,6 @@ The TC has 2 modes of operation: a RFC one and an internal one.
 
 If the TC thinks it needs the input from the larger community, the TC can call for a RFC. Else, it can decide by itself.
 
-If the disagreement involves a member of the TC, that member should recuse themselves from the decision.
-
 The decision to use a RFC process or an internal discussion is a discretionary decision of the TC.
 
 The TC can also reject a seizure for a few reasons such as: the matter was not discussed enough previously; it lacks expertise to reach a beneficial decision on the matter; or the matter is too trivial.
@@ -120,6 +120,13 @@ In the internal case, the TC has 96 hours to give its final decision. Exceptiona
 The decisions from the TC will be sent on the mailing list, with the [TC] tag.
 
 Internally, the TC should take decisions with a majority, or using ranked-choice voting.
+
+Each TC member must vote on such decision according to what is, in their view, best for the project.
+
+If a TC member feels they are affected by a conflict of interest with regards to the case, they should announce it and recuse themselves from the TC
+discussion and vote.
+
+A conflict of interest is presumed to occur when a TC member has a personal interest (e.g. financial) in a specific outcome of the case.
 
 The decision from the TC should be published with a summary of the reasons that lead to this decision.
 

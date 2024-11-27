@@ -36,7 +36,6 @@
 #include "avfilter.h"
 #include "ccfifo.h"
 #include "filters.h"
-#include "internal.h"
 #include "video.h"
 
 enum EOFAction {
@@ -105,15 +104,15 @@ typedef struct FPSContext {
 static const AVOption fps_options[] = {
     { "fps", "A string describing desired output framerate", OFFSET(framerate), AV_OPT_TYPE_STRING, { .str = "25" }, 0, 0, V|F },
     { "start_time", "Assume the first PTS should be this value.", OFFSET(start_time), AV_OPT_TYPE_DOUBLE, { .dbl = DBL_MAX}, -DBL_MAX, DBL_MAX, V|F },
-    { "round", "set rounding method for timestamps", OFFSET(rounding), AV_OPT_TYPE_INT, { .i64 = AV_ROUND_NEAR_INF }, 0, 5, V|F, "round" },
-        { "zero", "round towards 0",                 0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_ZERO     }, 0, 0, V|F, "round" },
-        { "inf",  "round away from 0",               0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_INF      }, 0, 0, V|F, "round" },
-        { "down", "round towards -infty",            0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_DOWN     }, 0, 0, V|F, "round" },
-        { "up",   "round towards +infty",            0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_UP       }, 0, 0, V|F, "round" },
-        { "near", "round to nearest",                0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_NEAR_INF }, 0, 0, V|F, "round" },
-    { "eof_action", "action performed for last frame", OFFSET(eof_action), AV_OPT_TYPE_INT, { .i64 = EOF_ACTION_ROUND }, 0, EOF_ACTION_NB-1, V|F, "eof_action" },
-        { "round", "round similar to other frames",  0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_ROUND }, 0, 0, V|F, "eof_action" },
-        { "pass",  "pass through last frame",        0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_PASS  }, 0, 0, V|F, "eof_action" },
+    { "round", "set rounding method for timestamps", OFFSET(rounding), AV_OPT_TYPE_INT, { .i64 = AV_ROUND_NEAR_INF }, 0, 5, V|F, .unit = "round" },
+        { "zero", "round towards 0",                 0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_ZERO     }, 0, 0, V|F, .unit = "round" },
+        { "inf",  "round away from 0",               0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_INF      }, 0, 0, V|F, .unit = "round" },
+        { "down", "round towards -infty",            0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_DOWN     }, 0, 0, V|F, .unit = "round" },
+        { "up",   "round towards +infty",            0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_UP       }, 0, 0, V|F, .unit = "round" },
+        { "near", "round to nearest",                0, AV_OPT_TYPE_CONST, { .i64 = AV_ROUND_NEAR_INF }, 0, 0, V|F, .unit = "round" },
+    { "eof_action", "action performed for last frame", OFFSET(eof_action), AV_OPT_TYPE_INT, { .i64 = EOF_ACTION_ROUND }, 0, EOF_ACTION_NB-1, V|F, .unit = "eof_action" },
+        { "round", "round similar to other frames",  0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_ROUND }, 0, 0, V|F, .unit = "eof_action" },
+        { "pass",  "pass through last frame",        0, AV_OPT_TYPE_CONST, { .i64 = EOF_ACTION_PASS  }, 0, 0, V|F, .unit = "eof_action" },
     { NULL }
 };
 
@@ -178,12 +177,14 @@ static int config_props(AVFilterLink* outlink)
 {
     AVFilterContext *ctx    = outlink->src;
     AVFilterLink    *inlink = ctx->inputs[0];
+    FilterLink      *il     = ff_filter_link(inlink);
+    FilterLink      *ol     = ff_filter_link(outlink);
     FPSContext      *s      = ctx->priv;
 
     double var_values[VARS_NB], res;
     int ret;
 
-    var_values[VAR_SOURCE_FPS]    = av_q2d(inlink->frame_rate);
+    var_values[VAR_SOURCE_FPS]    = av_q2d(il->frame_rate);
     var_values[VAR_FPS_NTSC]      = ntsc_fps;
     var_values[VAR_FPS_PAL]       = pal_fps;
     var_values[VAR_FPS_FILM]      = film_fps;
@@ -194,8 +195,8 @@ static int config_props(AVFilterLink* outlink)
     if (ret < 0)
         return ret;
 
-    outlink->frame_rate = av_d2q(res, INT_MAX);
-    outlink->time_base  = av_inv_q(outlink->frame_rate);
+    ol->frame_rate      = av_d2q(res, INT_MAX);
+    outlink->time_base  = av_inv_q(ol->frame_rate);
 
     /* Calculate the input and output pts offsets for start_time */
     if (s->start_time != DBL_MAX && s->start_time != AV_NOPTS_VALUE) {
@@ -214,13 +215,13 @@ static int config_props(AVFilterLink* outlink)
                s->in_pts_off, s->out_pts_off, s->start_time);
     }
 
-    ret = ff_ccfifo_init(&s->cc_fifo, outlink->frame_rate, ctx);
+    ret = ff_ccfifo_init(&s->cc_fifo, ol->frame_rate, ctx);
     if (ret < 0) {
         av_log(ctx, AV_LOG_ERROR, "Failure to setup CC FIFO queue\n");
         return ret;
     }
 
-    av_log(ctx, AV_LOG_VERBOSE, "fps=%d/%d\n", outlink->frame_rate.num, outlink->frame_rate.den);
+    av_log(ctx, AV_LOG_VERBOSE, "fps=%d/%d\n", ol->frame_rate.num, ol->frame_rate.den);
 
     return 0;
 }

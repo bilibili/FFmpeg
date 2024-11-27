@@ -26,6 +26,7 @@
 
 #include "config.h"
 
+#include "libavutil/avassert.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/common.h"
 #include "libavutil/lfg.h"
@@ -369,7 +370,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
 }
 
 /** Get x bits in the index interval [lsb,lsb+len-1] inclusive */
-#define BIT_STR(x,lsb,len) av_mod_uintp2((x) >> (lsb), (len))
+#define BIT_STR(x,lsb,len) av_zero_extend((x) >> (lsb), (len))
 
 /** Get the bit at specified position */
 #define BIT_POS(x, p) (((x) >> (p)) & 1)
@@ -554,6 +555,8 @@ static void decode_fixed_vector(float *fixed_vector, const uint16_t *pulse_hi,
             decode_6p_track(sig_pos[i], (int) pulse_lo[i] +
                            ((int) pulse_hi[i] << 11), 4, 1);
         break;
+    default:
+        av_assert2(0);
     }
 
     memset(fixed_vector, 0, sizeof(float) * AMRWB_SFR_SIZE);

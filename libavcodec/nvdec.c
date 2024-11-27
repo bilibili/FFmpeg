@@ -28,6 +28,7 @@
 #include "libavutil/hwcontext.h"
 #include "libavutil/hwcontext_cuda_internal.h"
 #include "libavutil/cuda_check.h"
+#include "libavutil/mem.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/pixfmt.h"
 
@@ -237,29 +238,30 @@ fail:
     return ret;
 }
 
-static AVBufferRef *nvdec_decoder_frame_alloc(void *opaque, size_t size)
+static int nvdec_decoder_frame_init(FFRefStructOpaque opaque, void *obj)
 {
-    NVDECFramePool *pool = opaque;
-    AVBufferRef *ret;
+    NVDECFramePool *pool = opaque.nc;
+    unsigned int *intp = obj;
 
     if (pool->nb_allocated >= pool->dpb_size)
-        return NULL;
+        return AVERROR(ENOMEM);
 
-    ret = av_buffer_alloc(sizeof(unsigned int));
-    if (!ret)
-        return NULL;
+    *intp = pool->nb_allocated++;
 
-    *(unsigned int*)ret->data = pool->nb_allocated++;
+    return 0;
+}
 
-    return ret;
+static void nvdec_decoder_frame_pool_free(FFRefStructOpaque opaque)
+{
+    av_free(opaque.nc);
 }
 
 int ff_nvdec_decode_uninit(AVCodecContext *avctx)
 {
     NVDECContext *ctx = avctx->internal->hwaccel_priv_data;
 
-    av_freep(&ctx->bitstream);
     av_freep(&ctx->bitstream_internal);
+    ctx->bitstream           = NULL;
     ctx->bitstream_len       = 0;
     ctx->bitstream_allocated = 0;
 
@@ -268,7 +270,7 @@ int ff_nvdec_decode_uninit(AVCodecContext *avctx)
     ctx->slice_offsets_allocated = 0;
 
     ff_refstruct_unref(&ctx->decoder);
-    av_buffer_pool_uninit(&ctx->decoder_pool);
+    ff_refstruct_pool_uninit(&ctx->decoder_pool);
 
     return 0;
 }
@@ -424,8 +426,9 @@ int ff_nvdec_decode_init(AVCodecContext *avctx)
     }
     pool->dpb_size = frames_ctx->initial_pool_size;
 
-    ctx->decoder_pool = av_buffer_pool_init2(sizeof(int), pool,
-                                             nvdec_decoder_frame_alloc, av_free);
+    ctx->decoder_pool = ff_refstruct_pool_alloc_ext(sizeof(unsigned int), 0, pool,
+                                                    nvdec_decoder_frame_init,
+                                                    NULL, NULL, nvdec_decoder_frame_pool_free);
     if (!ctx->decoder_pool) {
         ret = AVERROR(ENOMEM);
         goto fail;
@@ -444,8 +447,8 @@ static void nvdec_fdd_priv_free(void *priv)
     if (!cf)
         return;
 
-    av_buffer_unref(&cf->idx_ref);
-    av_buffer_unref(&cf->ref_idx_ref);
+    ff_refstruct_unref(&cf->idx_ref);
+    ff_refstruct_unref(&cf->ref_idx_ref);
     ff_refstruct_unref(&cf->decoder);
 
     av_freep(&priv);
@@ -469,8 +472,8 @@ static void nvdec_unmap_mapped_frame(void *opaque, uint8_t *data)
     CHECK_CU(decoder->cudl->cuCtxPopCurrent(&dummy));
 
 finish:
-    av_buffer_unref(&unmap_data->idx_ref);
-    av_buffer_unref(&unmap_data->ref_idx_ref);
+    ff_refstruct_unref(&unmap_data->idx_ref);
+    ff_refstruct_unref(&unmap_data->ref_idx_ref);
     ff_refstruct_unref(&unmap_data->decoder);
     av_free(unmap_data);
 }
@@ -526,10 +529,7 @@ static int nvdec_retrieve_data(void *logctx, AVFrame *frame)
         goto copy_fail;
 
     unmap_data->idx = cf->idx;
-    if (!(unmap_data->idx_ref     = av_buffer_ref(cf->idx_ref))) {
-        ret = AVERROR(ENOMEM);
-        goto copy_fail;
-    }
+    unmap_data->idx_ref = ff_refstruct_ref(cf->idx_ref);
     unmap_data->decoder = ff_refstruct_ref(cf->decoder);
 
     av_pix_fmt_get_chroma_sub_sample(hwctx->sw_format, &shift_h, &shift_v);
@@ -577,13 +577,13 @@ int ff_nvdec_start_frame(AVCodecContext *avctx, AVFrame *frame)
 
     cf->decoder = ff_refstruct_ref(ctx->decoder);
 
-    cf->idx_ref = av_buffer_pool_get(ctx->decoder_pool);
+    cf->idx_ref = ff_refstruct_pool_get(ctx->decoder_pool);
     if (!cf->idx_ref) {
         av_log(avctx, AV_LOG_ERROR, "No decoder surfaces left\n");
         ret = AVERROR(ENOMEM);
         goto fail;
     }
-    cf->ref_idx = cf->idx = *(unsigned int*)cf->idx_ref->data;
+    cf->ref_idx = cf->idx = *cf->idx_ref;
 
     fdd->hwaccel_priv      = cf;
     fdd->hwaccel_priv_free = nvdec_fdd_priv_free;
@@ -611,16 +611,16 @@ int ff_nvdec_start_frame_sep_ref(AVCodecContext *avctx, AVFrame *frame, int has_
 
     if (has_sep_ref) {
         if (!cf->ref_idx_ref) {
-            cf->ref_idx_ref = av_buffer_pool_get(ctx->decoder_pool);
+            cf->ref_idx_ref = ff_refstruct_pool_get(ctx->decoder_pool);
             if (!cf->ref_idx_ref) {
                 av_log(avctx, AV_LOG_ERROR, "No decoder surfaces left\n");
                 ret = AVERROR(ENOMEM);
                 goto fail;
             }
         }
-        cf->ref_idx = *(unsigned int*)cf->ref_idx_ref->data;
+        cf->ref_idx = *cf->ref_idx_ref;
     } else {
-        av_buffer_unref(&cf->ref_idx_ref);
+        ff_refstruct_unref(&cf->ref_idx_ref);
         cf->ref_idx = cf->idx;
     }
 
@@ -665,6 +665,8 @@ int ff_nvdec_simple_end_frame(AVCodecContext *avctx)
     NVDECContext *ctx = avctx->internal->hwaccel_priv_data;
     int ret = ff_nvdec_end_frame(avctx);
     ctx->bitstream = NULL;
+    ctx->bitstream_len = 0;
+    ctx->nb_slices = 0;
     return ret;
 }
 
@@ -681,7 +683,7 @@ int ff_nvdec_simple_decode_slice(AVCodecContext *avctx, const uint8_t *buffer,
     ctx->slice_offsets = tmp;
 
     if (!ctx->bitstream)
-        ctx->bitstream = (uint8_t*)buffer;
+        ctx->bitstream = buffer;
 
     ctx->slice_offsets[ctx->nb_slices] = buffer - ctx->bitstream;
     ctx->bitstream_len += size;

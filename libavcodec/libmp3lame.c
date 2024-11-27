@@ -31,6 +31,7 @@
 #include "libavutil/float_dsp.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/log.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "avcodec.h"
 #include "audio_frame_queue.h"
@@ -352,7 +353,6 @@ const FFCodec ff_libmp3lame_encoder = {
                                                              AV_SAMPLE_FMT_S16P,
                                                              AV_SAMPLE_FMT_NONE },
     .p.supported_samplerates = libmp3lame_sample_rates,
-    CODEC_OLD_CHANNEL_LAYOUTS(AV_CH_LAYOUT_MONO, AV_CH_LAYOUT_STEREO)
     .p.ch_layouts          = (const AVChannelLayout[]) { AV_CHANNEL_LAYOUT_MONO,
                                                          AV_CHANNEL_LAYOUT_STEREO,
                                                          { 0 },

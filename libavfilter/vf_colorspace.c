@@ -25,6 +25,7 @@
 
 #include "libavutil/avassert.h"
 #include "libavutil/csp.h"
+#include "libavutil/mem.h"
 #include "libavutil/mem_internal.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
@@ -32,8 +33,8 @@
 
 #include "avfilter.h"
 #include "colorspacedsp.h"
+#include "filters.h"
 #include "formats.h"
-#include "internal.h"
 #include "video.h"
 #include "colorspace.h"
 
@@ -432,8 +433,7 @@ static int create_filtergraph(AVFilterContext *ctx,
     if (out->color_trc       != s->out_trc) s->out_txchr     = NULL;
     if (in->colorspace       != s->in_csp ||
         in->color_range      != s->in_rng)  s->in_lumacoef   = NULL;
-    if (out->colorspace      != s->out_csp ||
-        out->color_range     != s->out_rng) s->out_lumacoef  = NULL;
+    if (out->color_range     != s->out_rng) s->rgb2yuv       = NULL;
 
     if (!s->out_primaries || !s->in_primaries) {
         s->in_prm = in->color_primaries;
@@ -562,26 +562,8 @@ static int create_filtergraph(AVFilterContext *ctx,
         redo_yuv2rgb = 1;
     }
 
-    if (!s->out_lumacoef) {
-        s->out_csp = out->colorspace;
+    if (!s->rgb2yuv) {
         s->out_rng = out->color_range;
-        s->out_lumacoef = av_csp_luma_coeffs_from_avcsp(s->out_csp);
-        if (!s->out_lumacoef) {
-            if (s->out_csp == AVCOL_SPC_UNSPECIFIED) {
-                if (s->user_all == CS_UNSPECIFIED) {
-                    av_log(ctx, AV_LOG_ERROR,
-                           "Please specify output colorspace\n");
-                } else {
-                    av_log(ctx, AV_LOG_ERROR,
-                           "Unsupported output color property %d\n", s->user_all);
-                }
-            } else {
-                av_log(ctx, AV_LOG_ERROR,
-                       "Unsupported output colorspace %d (%s)\n", s->out_csp,
-                       av_color_space_name(s->out_csp));
-            }
-            return AVERROR(EINVAL);
-        }
         redo_rgb2yuv = 1;
     }
 
@@ -686,6 +668,26 @@ static av_cold int init(AVFilterContext *ctx)
 {
     ColorSpaceContext *s = ctx->priv;
 
+    s->out_csp  = s->user_csp == AVCOL_SPC_UNSPECIFIED ?
+                  default_csp[FFMIN(s->user_all, CS_NB)] : s->user_csp;
+    s->out_lumacoef = av_csp_luma_coeffs_from_avcsp(s->out_csp);
+    if (!s->out_lumacoef) {
+        if (s->out_csp == AVCOL_SPC_UNSPECIFIED) {
+            if (s->user_all == CS_UNSPECIFIED) {
+                av_log(ctx, AV_LOG_ERROR,
+                       "Please specify output colorspace\n");
+            } else {
+                av_log(ctx, AV_LOG_ERROR,
+                       "Unsupported output color property %d\n", s->user_all);
+            }
+        } else {
+            av_log(ctx, AV_LOG_ERROR,
+                   "Unsupported output colorspace %d (%s)\n", s->out_csp,
+                   av_color_space_name(s->out_csp));
+        }
+        return AVERROR(EINVAL);
+    }
+
     ff_colorspacedsp_init(&s->dsp);
 
     return 0;
@@ -734,6 +736,9 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
         return res;
     }
 
+    out->colorspace =      s->out_csp;
+    out->color_range =     s->user_rng == AVCOL_RANGE_UNSPECIFIED ?
+                           in->color_range : s->user_rng;
     out->color_primaries = s->user_prm == AVCOL_PRI_UNSPECIFIED ?
                            default_prm[FFMIN(s->user_all, CS_NB)] : s->user_prm;
     if (s->user_trc == AVCOL_TRC_UNSPECIFIED) {
@@ -745,10 +750,6 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
     } else {
         out->color_trc   = s->user_trc;
     }
-    out->colorspace      = s->user_csp == AVCOL_SPC_UNSPECIFIED ?
-                           default_csp[FFMIN(s->user_all, CS_NB)] : s->user_csp;
-    out->color_range     = s->user_rng == AVCOL_RANGE_UNSPECIFIED ?
-                           in->color_range : s->user_rng;
     if (rgb_sz != s->rgb_sz) {
         const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(out->format);
         int uvw = in->width >> desc->log2_chroma_w;
@@ -840,7 +841,17 @@ static int query_formats(AVFilterContext *ctx)
     };
     int res;
     ColorSpaceContext *s = ctx->priv;
+    AVFilterLink *outlink = ctx->outputs[0];
     AVFilterFormats *formats = ff_make_format_list(pix_fmts);
+
+    res = ff_formats_ref(ff_make_formats_list_singleton(s->out_csp), &outlink->incfg.color_spaces);
+    if (res < 0)
+        return res;
+    if (s->user_rng != AVCOL_RANGE_UNSPECIFIED) {
+        res = ff_formats_ref(ff_make_formats_list_singleton(s->user_rng), &outlink->incfg.color_ranges);
+        if (res < 0)
+            return res;
+    }
 
     if (!formats)
         return AVERROR(ENOMEM);
@@ -854,7 +865,7 @@ static int query_formats(AVFilterContext *ctx)
     if (res < 0)
         return res;
 
-    return ff_formats_ref(formats, &ctx->outputs[0]->incfg.formats);
+    return ff_formats_ref(formats, &outlink->incfg.formats);
 }
 
 static int config_props(AVFilterLink *outlink)
@@ -878,12 +889,12 @@ static int config_props(AVFilterLink *outlink)
 
 #define OFFSET(x) offsetof(ColorSpaceContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
-#define ENUM(x, y, z) { x, "", 0, AV_OPT_TYPE_CONST, { .i64 = y }, INT_MIN, INT_MAX, FLAGS, z }
+#define ENUM(x, y, z) { x, "", 0, AV_OPT_TYPE_CONST, { .i64 = y }, INT_MIN, INT_MAX, FLAGS, .unit = z }
 
 static const AVOption colorspace_options[] = {
     { "all",        "Set all color properties together",
       OFFSET(user_all),   AV_OPT_TYPE_INT, { .i64 = CS_UNSPECIFIED },
-      CS_UNSPECIFIED, CS_NB - 1, FLAGS, "all" },
+      CS_UNSPECIFIED, CS_NB - 1, FLAGS, .unit = "all" },
     ENUM("bt470m",      CS_BT470M,             "all"),
     ENUM("bt470bg",     CS_BT470BG,            "all"),
     ENUM("bt601-6-525", CS_BT601_6_525,        "all"),
@@ -895,7 +906,7 @@ static const AVOption colorspace_options[] = {
 
     { "space",      "Output colorspace",
       OFFSET(user_csp),   AV_OPT_TYPE_INT, { .i64 = AVCOL_SPC_UNSPECIFIED },
-      AVCOL_SPC_RGB, AVCOL_SPC_NB - 1, FLAGS,  "csp"},
+      AVCOL_SPC_RGB, AVCOL_SPC_NB - 1, FLAGS,  .unit = "csp"},
     ENUM("bt709",       AVCOL_SPC_BT709,       "csp"),
     ENUM("fcc",         AVCOL_SPC_FCC,         "csp"),
     ENUM("bt470bg",     AVCOL_SPC_BT470BG,     "csp"),
@@ -908,7 +919,7 @@ static const AVOption colorspace_options[] = {
 
     { "range",      "Output color range",
       OFFSET(user_rng),   AV_OPT_TYPE_INT, { .i64 = AVCOL_RANGE_UNSPECIFIED },
-      AVCOL_RANGE_UNSPECIFIED, AVCOL_RANGE_NB - 1, FLAGS, "rng" },
+      AVCOL_RANGE_UNSPECIFIED, AVCOL_RANGE_NB - 1, FLAGS, .unit = "rng" },
     ENUM("tv",          AVCOL_RANGE_MPEG,      "rng"),
     ENUM("mpeg",        AVCOL_RANGE_MPEG,      "rng"),
     ENUM("pc",          AVCOL_RANGE_JPEG,      "rng"),
@@ -916,7 +927,7 @@ static const AVOption colorspace_options[] = {
 
     { "primaries",  "Output color primaries",
       OFFSET(user_prm),   AV_OPT_TYPE_INT, { .i64 = AVCOL_PRI_UNSPECIFIED },
-      AVCOL_PRI_RESERVED0, AVCOL_PRI_NB - 1, FLAGS, "prm" },
+      AVCOL_PRI_RESERVED0, AVCOL_PRI_NB - 1, FLAGS, .unit = "prm" },
     ENUM("bt709",        AVCOL_PRI_BT709,      "prm"),
     ENUM("bt470m",       AVCOL_PRI_BT470M,     "prm"),
     ENUM("bt470bg",      AVCOL_PRI_BT470BG,    "prm"),
@@ -932,7 +943,7 @@ static const AVOption colorspace_options[] = {
 
     { "trc",        "Output transfer characteristics",
       OFFSET(user_trc),   AV_OPT_TYPE_INT, { .i64 = AVCOL_TRC_UNSPECIFIED },
-      AVCOL_TRC_RESERVED0, AVCOL_TRC_NB - 1, FLAGS, "trc" },
+      AVCOL_TRC_RESERVED0, AVCOL_TRC_NB - 1, FLAGS, .unit = "trc" },
     ENUM("bt709",        AVCOL_TRC_BT709,        "trc"),
     ENUM("bt470m",       AVCOL_TRC_GAMMA22,      "trc"),
     ENUM("gamma22",      AVCOL_TRC_GAMMA22,      "trc"),
@@ -950,7 +961,7 @@ static const AVOption colorspace_options[] = {
 
     { "format",   "Output pixel format",
       OFFSET(user_format), AV_OPT_TYPE_INT,  { .i64 = AV_PIX_FMT_NONE },
-      AV_PIX_FMT_NONE, AV_PIX_FMT_GBRAP12LE, FLAGS, "fmt" },
+      AV_PIX_FMT_NONE, AV_PIX_FMT_GBRAP12LE, FLAGS, .unit = "fmt" },
     ENUM("yuv420p",   AV_PIX_FMT_YUV420P,   "fmt"),
     ENUM("yuv420p10", AV_PIX_FMT_YUV420P10, "fmt"),
     ENUM("yuv420p12", AV_PIX_FMT_YUV420P12, "fmt"),
@@ -967,32 +978,32 @@ static const AVOption colorspace_options[] = {
 
     { "dither",   "Dithering mode",
       OFFSET(dither), AV_OPT_TYPE_INT, { .i64 = DITHER_NONE },
-      DITHER_NONE, DITHER_NB - 1, FLAGS, "dither" },
+      DITHER_NONE, DITHER_NB - 1, FLAGS, .unit = "dither" },
     ENUM("none", DITHER_NONE, "dither"),
     ENUM("fsb",  DITHER_FSB,  "dither"),
 
     { "wpadapt", "Whitepoint adaptation method",
       OFFSET(wp_adapt), AV_OPT_TYPE_INT, { .i64 = WP_ADAPT_BRADFORD },
-      WP_ADAPT_BRADFORD, NB_WP_ADAPT - 1, FLAGS, "wpadapt" },
+      WP_ADAPT_BRADFORD, NB_WP_ADAPT - 1, FLAGS, .unit = "wpadapt" },
     ENUM("bradford", WP_ADAPT_BRADFORD, "wpadapt"),
     ENUM("vonkries", WP_ADAPT_VON_KRIES, "wpadapt"),
     ENUM("identity", WP_ADAPT_IDENTITY, "wpadapt"),
 
     { "iall",       "Set all input color properties together",
       OFFSET(user_iall),   AV_OPT_TYPE_INT, { .i64 = CS_UNSPECIFIED },
-      CS_UNSPECIFIED, CS_NB - 1, FLAGS, "all" },
+      CS_UNSPECIFIED, CS_NB - 1, FLAGS, .unit = "all" },
     { "ispace",     "Input colorspace",
       OFFSET(user_icsp),  AV_OPT_TYPE_INT, { .i64 = AVCOL_SPC_UNSPECIFIED },
-      AVCOL_PRI_RESERVED0, AVCOL_PRI_NB - 1, FLAGS, "csp" },
+      AVCOL_PRI_RESERVED0, AVCOL_PRI_NB - 1, FLAGS, .unit = "csp" },
     { "irange",     "Input color range",
       OFFSET(user_irng),  AV_OPT_TYPE_INT, { .i64 = AVCOL_RANGE_UNSPECIFIED },
-      AVCOL_RANGE_UNSPECIFIED, AVCOL_RANGE_NB - 1, FLAGS, "rng" },
+      AVCOL_RANGE_UNSPECIFIED, AVCOL_RANGE_NB - 1, FLAGS, .unit = "rng" },
     { "iprimaries", "Input color primaries",
       OFFSET(user_iprm),  AV_OPT_TYPE_INT, { .i64 = AVCOL_PRI_UNSPECIFIED },
-      AVCOL_PRI_RESERVED0, AVCOL_PRI_NB - 1, FLAGS, "prm" },
+      AVCOL_PRI_RESERVED0, AVCOL_PRI_NB - 1, FLAGS, .unit = "prm" },
     { "itrc",       "Input transfer characteristics",
       OFFSET(user_itrc),  AV_OPT_TYPE_INT, { .i64 = AVCOL_TRC_UNSPECIFIED },
-      AVCOL_TRC_RESERVED0, AVCOL_TRC_NB - 1, FLAGS, "trc" },
+      AVCOL_TRC_RESERVED0, AVCOL_TRC_NB - 1, FLAGS, .unit = "trc" },
 
     { NULL }
 };

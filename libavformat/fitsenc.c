@@ -24,8 +24,8 @@
  * FITS muxer.
  */
 
+#include "avformat.h"
 #include "avio_internal.h"
-#include "internal.h"
 #include "mux.h"
 
 typedef struct FITSContext {
@@ -198,6 +198,9 @@ const FFOutputFormat ff_fits_muxer = {
     .p.extensions   = "fits",
     .p.audio_codec  = AV_CODEC_ID_NONE,
     .p.video_codec  = AV_CODEC_ID_FITS,
+    .p.subtitle_codec = AV_CODEC_ID_NONE,
+    .flags_internal   = FF_OFMT_FLAG_MAX_ONE_OF_EACH |
+                        FF_OFMT_FLAG_ONLY_DEFAULT_CODECS,
     .priv_data_size = sizeof(FITSContext),
     .write_header   = fits_write_header,
     .write_packet   = fits_write_packet,

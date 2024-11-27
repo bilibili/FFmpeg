@@ -22,9 +22,11 @@
 
 #include <time.h>
 
+#include "libavutil/mem.h"
 #include "libavutil/parseutils.h"
 #include "avio_internal.h"
 #include "avformat.h"
+#include "demux.h"
 #include "internal.h"
 
 typedef struct DHAVContext {
@@ -271,9 +273,14 @@ static int dhav_read_header(AVFormatContext *s)
 {
     DHAVContext *dhav = s->priv_data;
     uint8_t signature[5];
+    int ret = ffio_ensure_seekback(s->pb, 5);
 
-    ffio_ensure_seekback(s->pb, 5);
-    avio_read(s->pb, signature, sizeof(signature));
+    if (ret < 0)
+        return ret;
+
+    ret = ffio_read_size(s->pb, signature, sizeof(signature));
+    if (ret < 0)
+        return ret;
     if (!memcmp(signature, "DAHUA", 5)) {
         avio_skip(s->pb, 0x400 - 5);
         dhav->last_good_pos = avio_tell(s->pb);
@@ -462,14 +469,14 @@ static int dhav_read_seek(AVFormatContext *s, int stream_index,
     return 0;
 }
 
-const AVInputFormat ff_dhav_demuxer = {
-    .name           = "dhav",
-    .long_name      = NULL_IF_CONFIG_SMALL("Video DAV"),
+const FFInputFormat ff_dhav_demuxer = {
+    .p.name         = "dhav",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Video DAV"),
+    .p.extensions   = "dav",
+    .p.flags        = AVFMT_GENERIC_INDEX | AVFMT_NO_BYTE_SEEK | AVFMT_TS_DISCONT | AVFMT_TS_NONSTRICT | AVFMT_SEEK_TO_PTS,
     .priv_data_size = sizeof(DHAVContext),
     .read_probe     = dhav_probe,
     .read_header    = dhav_read_header,
     .read_packet    = dhav_read_packet,
     .read_seek      = dhav_read_seek,
-    .extensions     = "dav",
-    .flags          = AVFMT_GENERIC_INDEX | AVFMT_NO_BYTE_SEEK | AVFMT_TS_DISCONT | AVFMT_TS_NONSTRICT | AVFMT_SEEK_TO_PTS,
 };

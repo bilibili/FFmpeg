@@ -28,6 +28,7 @@
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 #include "libavutil/channel_layout.h"
+#include "libavutil/common.h"
 #include "libavutil/emms.h"
 #include "libavutil/fifo.h"
 #include "libavutil/imgutils.h"
@@ -53,6 +54,20 @@
  * addressable by a 32-bit signed integer as used by get_bits.
  */
 #define FF_MAX_EXTRADATA_SIZE ((1 << 28) - AV_INPUT_BUFFER_PADDING_SIZE)
+
+const SideDataMap ff_sd_global_map[] = {
+    { AV_PKT_DATA_REPLAYGAIN ,                AV_FRAME_DATA_REPLAYGAIN },
+    { AV_PKT_DATA_DISPLAYMATRIX,              AV_FRAME_DATA_DISPLAYMATRIX },
+    { AV_PKT_DATA_SPHERICAL,                  AV_FRAME_DATA_SPHERICAL },
+    { AV_PKT_DATA_STEREO3D,                   AV_FRAME_DATA_STEREO3D },
+    { AV_PKT_DATA_AUDIO_SERVICE_TYPE,         AV_FRAME_DATA_AUDIO_SERVICE_TYPE },
+    { AV_PKT_DATA_MASTERING_DISPLAY_METADATA, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA },
+    { AV_PKT_DATA_CONTENT_LIGHT_LEVEL,        AV_FRAME_DATA_CONTENT_LIGHT_LEVEL },
+    { AV_PKT_DATA_ICC_PROFILE,                AV_FRAME_DATA_ICC_PROFILE },
+    { AV_PKT_DATA_AMBIENT_VIEWING_ENVIRONMENT,AV_FRAME_DATA_AMBIENT_VIEWING_ENVIRONMENT },
+    { AV_PKT_DATA_NB },
+};
+
 
 int avcodec_default_execute(AVCodecContext *c, int (*func)(AVCodecContext *c2, void *arg2), void *arg, int *ret, int count, int size)
 {
@@ -160,6 +175,14 @@ int attribute_align_arg avcodec_open2(AVCodecContext *avctx, const AVCodec *code
     if (avctx->extradata_size < 0 || avctx->extradata_size >= FF_MAX_EXTRADATA_SIZE)
         return AVERROR(EINVAL);
 
+    if ((ret = av_opt_set_dict(avctx, options)) < 0)
+        return ret;
+
+    if (avctx->codec_whitelist && av_match_list(codec->name, avctx->codec_whitelist, ',') <= 0) {
+        av_log(avctx, AV_LOG_ERROR, "Codec (%s) not on whitelist \'%s\'\n", codec->name, avctx->codec_whitelist);
+        return AVERROR(EINVAL);
+    }
+
     avci = av_codec_is_decoder(codec) ?
         ff_decode_internal_alloc()    :
         ff_encode_internal_alloc();
@@ -192,14 +215,6 @@ int attribute_align_arg avcodec_open2(AVCodecContext *avctx, const AVCodec *code
             goto free_and_end;
     } else {
         avctx->priv_data = NULL;
-    }
-    if ((ret = av_opt_set_dict(avctx, options)) < 0)
-        goto free_and_end;
-
-    if (avctx->codec_whitelist && av_match_list(codec->name, avctx->codec_whitelist, ',') <= 0) {
-        av_log(avctx, AV_LOG_ERROR, "Codec (%s) not on whitelist \'%s\'\n", codec->name, avctx->codec_whitelist);
-        ret = AVERROR(EINVAL);
-        goto free_and_end;
     }
 
     // only call ff_set_dimensions() for non H.264/VP6F/DXV codecs so as not to overwrite previously setup dimensions
@@ -241,26 +256,6 @@ int attribute_align_arg avcodec_open2(AVCodecContext *avctx, const AVCodec *code
         goto free_and_end;
     }
 
-#if FF_API_OLD_CHANNEL_LAYOUT
-FF_DISABLE_DEPRECATION_WARNINGS
-    /* compat wrapper for old-style callers */
-    if (avctx->channel_layout && !avctx->channels)
-        avctx->channels = av_popcount64(avctx->channel_layout);
-
-    if ((avctx->channels && avctx->ch_layout.nb_channels != avctx->channels) ||
-        (avctx->channel_layout && (avctx->ch_layout.order != AV_CHANNEL_ORDER_NATIVE ||
-                                   avctx->ch_layout.u.mask != avctx->channel_layout))) {
-        av_channel_layout_uninit(&avctx->ch_layout);
-        if (avctx->channel_layout) {
-            av_channel_layout_from_mask(&avctx->ch_layout, avctx->channel_layout);
-        } else {
-            avctx->ch_layout.order       = AV_CHANNEL_ORDER_UNSPEC;
-        }
-        avctx->ch_layout.nb_channels = avctx->channels;
-    }
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-
     /* AV_CODEC_CAP_CHANNEL_CONF is a decoder-only flag; so the code below
      * in particular checks that nb_channels is set for all audio encoders. */
     if (avctx->codec_type == AVMEDIA_TYPE_AUDIO && !avctx->ch_layout.nb_channels
@@ -282,11 +277,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
     }
 
     avctx->frame_num = 0;
-#if FF_API_AVCTX_FRAME_NUMBER
-FF_DISABLE_DEPRECATION_WARNINGS
-    avctx->frame_number = avctx->frame_num;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
     avctx->codec_descriptor = avcodec_descriptor_get(avctx->codec_id);
 
     if ((avctx->codec->capabilities & AV_CODEC_CAP_EXPERIMENTAL) &&
@@ -350,15 +340,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
         if (!avctx->bit_rate)
             avctx->bit_rate = get_bit_rate(avctx);
 
-#if FF_API_OLD_CHANNEL_LAYOUT
-FF_DISABLE_DEPRECATION_WARNINGS
-        /* update the deprecated fields for old-style callers */
-        avctx->channels = avctx->ch_layout.nb_channels;
-        avctx->channel_layout = avctx->ch_layout.order == AV_CHANNEL_ORDER_NATIVE ?
-                                avctx->ch_layout.u.mask : 0;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-
         /* validate channel layout from the decoder */
         if ((avctx->ch_layout.nb_channels && !av_channel_layout_check(&avctx->ch_layout)) ||
             avctx->ch_layout.nb_channels > FF_SANE_NB_CHANNELS) {
@@ -377,7 +358,7 @@ end:
 
     return ret;
 free_and_end:
-    avcodec_close(avctx);
+    ff_codec_close(avctx);
     goto end;
 }
 
@@ -401,10 +382,13 @@ void avcodec_flush_buffers(AVCodecContext *avctx)
 
     avci->draining      = 0;
     avci->draining_done = 0;
-    av_frame_unref(avci->buffer_frame);
-    av_packet_unref(avci->buffer_pkt);
+    if (avci->buffer_frame)
+        av_frame_unref(avci->buffer_frame);
+    if (avci->buffer_pkt)
+        av_packet_unref(avci->buffer_pkt);
 
-    if (HAVE_THREADS && avctx->active_thread_type & FF_THREAD_FRAME)
+    if (HAVE_THREADS && avctx->active_thread_type & FF_THREAD_FRAME &&
+        !avci->is_frame_mt)
         ff_thread_flush(avctx);
     else if (ffcodec(avctx->codec)->flush)
         ffcodec(avctx->codec)->flush(avctx);
@@ -432,12 +416,12 @@ void avsubtitle_free(AVSubtitle *sub)
     memset(sub, 0, sizeof(*sub));
 }
 
-av_cold int avcodec_close(AVCodecContext *avctx)
+av_cold void ff_codec_close(AVCodecContext *avctx)
 {
     int i;
 
     if (!avctx)
-        return 0;
+        return;
 
     if (avcodec_is_open(avctx)) {
         AVCodecInternal *avci = avctx->internal;
@@ -461,6 +445,9 @@ av_cold int avcodec_close(AVCodecContext *avctx)
         av_frame_free(&avci->recon_frame);
 
         ff_refstruct_unref(&avci->pool);
+        ff_refstruct_pool_uninit(&avci->progress_frame_pool);
+        if (av_codec_is_decoder(avctx->codec))
+            ff_decode_internal_uninit(avctx);
 
         ff_hwaccel_uninit(avctx);
 
@@ -481,6 +468,8 @@ av_cold int avcodec_close(AVCodecContext *avctx)
         av_freep(&avctx->coded_side_data[i].data);
     av_freep(&avctx->coded_side_data);
     avctx->nb_coded_side_data = 0;
+    av_frame_side_data_free(&avctx->decoded_side_data,
+                            &avctx->nb_decoded_side_data);
 
     av_buffer_unref(&avctx->hw_frames_ctx);
     av_buffer_unref(&avctx->hw_device_ctx);
@@ -497,9 +486,15 @@ av_cold int avcodec_close(AVCodecContext *avctx)
 
     avctx->codec = NULL;
     avctx->active_thread_type = 0;
+}
 
+#if FF_API_AVCODEC_CLOSE
+int avcodec_close(AVCodecContext *avctx)
+{
+    ff_codec_close(avctx);
     return 0;
 }
+#endif
 
 static const char *unknown_if_null(const char *str)
 {
@@ -619,6 +614,7 @@ void avcodec_string(char *buf, int buf_size, AVCodecContext *enc, int encode)
                        enc->width, enc->height);
 
             if (av_log_get_level() >= AV_LOG_VERBOSE &&
+                enc->coded_width && enc->coded_height &&
                 (enc->width != enc->coded_width ||
                  enc->height != enc->coded_height))
                 av_bprintf(&bprint, " (%dx%d)",
@@ -656,12 +652,7 @@ void avcodec_string(char *buf, int buf_size, AVCodecContext *enc, int encode)
         if (enc->sample_rate) {
             av_bprintf(&bprint, "%d Hz, ", enc->sample_rate);
         }
-        {
-            char buf[512];
-            int ret = av_channel_layout_describe(&enc->ch_layout, buf, sizeof(buf));
-            if (ret >= 0)
-                av_bprintf(&bprint, "%s", buf);
-        }
+        av_channel_layout_describe_bprint(&enc->ch_layout, &bprint);
         if (enc->sample_fmt != AV_SAMPLE_FMT_NONE &&
             (str = av_get_sample_fmt_name(enc->sample_fmt))) {
             av_bprintf(&bprint, ", %s", str);
@@ -717,4 +708,97 @@ int attribute_align_arg avcodec_receive_frame(AVCodecContext *avctx, AVFrame *fr
     if (av_codec_is_decoder(avctx->codec))
         return ff_decode_receive_frame(avctx, frame);
     return ff_encode_receive_frame(avctx, frame);
+}
+
+#define WRAP_CONFIG(allowed_type, field, field_type, terminator)            \
+    do {                                                                    \
+        static const field_type end = terminator;                           \
+        if (codec->type != (allowed_type))                                  \
+            return AVERROR(EINVAL);                                         \
+        *out_configs = (field);                                             \
+        if (out_num_configs) {                                              \
+            for (int i = 0;; i++) {                                         \
+                if (!(field) || !memcmp(&(field)[i], &end, sizeof(end))) {  \
+                    *out_num_configs = i;                                   \
+                    break;                                                  \
+                }                                                           \
+            }                                                               \
+        }                                                                   \
+        return 0;                                                           \
+    } while (0)
+
+static const enum AVColorRange color_range_jpeg[] = {
+    AVCOL_RANGE_JPEG, AVCOL_RANGE_UNSPECIFIED
+};
+
+static const enum AVColorRange color_range_mpeg[] = {
+    AVCOL_RANGE_MPEG, AVCOL_RANGE_UNSPECIFIED
+};
+
+static const enum AVColorRange color_range_all[] = {
+    AVCOL_RANGE_MPEG, AVCOL_RANGE_JPEG, AVCOL_RANGE_UNSPECIFIED
+};
+
+static const enum AVColorRange *color_range_table[] = {
+    [AVCOL_RANGE_MPEG] = color_range_mpeg,
+    [AVCOL_RANGE_JPEG] = color_range_jpeg,
+    [AVCOL_RANGE_MPEG | AVCOL_RANGE_JPEG] = color_range_all,
+};
+
+int ff_default_get_supported_config(const AVCodecContext *avctx,
+                                    const AVCodec *codec,
+                                    enum AVCodecConfig config,
+                                    unsigned flags,
+                                    const void **out_configs,
+                                    int *out_num_configs)
+{
+    switch (config) {
+FF_DISABLE_DEPRECATION_WARNINGS
+    case AV_CODEC_CONFIG_PIX_FORMAT:
+        WRAP_CONFIG(AVMEDIA_TYPE_VIDEO, codec->pix_fmts, enum AVPixelFormat, AV_PIX_FMT_NONE);
+    case AV_CODEC_CONFIG_FRAME_RATE:
+        WRAP_CONFIG(AVMEDIA_TYPE_VIDEO, codec->supported_framerates, AVRational, {0});
+    case AV_CODEC_CONFIG_SAMPLE_RATE:
+        WRAP_CONFIG(AVMEDIA_TYPE_AUDIO, codec->supported_samplerates, int, 0);
+    case AV_CODEC_CONFIG_SAMPLE_FORMAT:
+        WRAP_CONFIG(AVMEDIA_TYPE_AUDIO, codec->sample_fmts, enum AVSampleFormat, AV_SAMPLE_FMT_NONE);
+    case AV_CODEC_CONFIG_CHANNEL_LAYOUT:
+        WRAP_CONFIG(AVMEDIA_TYPE_AUDIO, codec->ch_layouts, AVChannelLayout, {0});
+FF_ENABLE_DEPRECATION_WARNINGS
+
+    case AV_CODEC_CONFIG_COLOR_RANGE:
+        if (codec->type != AVMEDIA_TYPE_VIDEO)
+            return AVERROR(EINVAL);
+        *out_configs = color_range_table[ffcodec(codec)->color_ranges];
+        if (out_num_configs)
+            *out_num_configs = av_popcount(ffcodec(codec)->color_ranges);
+        return 0;
+
+    case AV_CODEC_CONFIG_COLOR_SPACE:
+        *out_configs = NULL;
+        if (out_num_configs)
+            *out_num_configs = 0;
+        return 0;
+    default:
+        return AVERROR(EINVAL);
+    }
+}
+
+int avcodec_get_supported_config(const AVCodecContext *avctx, const AVCodec *codec,
+                                 enum AVCodecConfig config, unsigned flags,
+                                 const void **out, int *out_num)
+{
+    const FFCodec *codec2;
+    int dummy_num = 0;
+    if (!codec)
+        codec = avctx->codec;
+    if (!out_num)
+        out_num = &dummy_num;
+
+    codec2 = ffcodec(codec);
+    if (codec2->get_supported_config) {
+        return codec2->get_supported_config(avctx, codec, config, flags, out, out_num);
+    } else {
+        return ff_default_get_supported_config(avctx, codec, config, flags, out, out_num);
+    }
 }

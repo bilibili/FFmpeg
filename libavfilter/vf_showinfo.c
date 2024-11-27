@@ -22,6 +22,7 @@
  * filter for showing textual video frame information
  */
 
+#include <ctype.h>
 #include <inttypes.h>
 
 #include "libavutil/bswap.h"
@@ -46,12 +47,13 @@
 #include "libavutil/uuid.h"
 
 #include "avfilter.h"
-#include "internal.h"
+#include "filters.h"
 #include "video.h"
 
 typedef struct ShowInfoContext {
     const AVClass *class;
     int calculate_checksums;
+    int udu_sei_as_ascii;
 } ShowInfoContext;
 
 #define OFFSET(x) offsetof(ShowInfoContext, x)
@@ -59,6 +61,8 @@ typedef struct ShowInfoContext {
 
 static const AVOption showinfo_options[] = {
     { "checksum", "calculate checksums", OFFSET(calculate_checksums), AV_OPT_TYPE_BOOL, {.i64=1}, 0, 1, VF },
+    { "udu_sei_as_ascii", "try to print user data unregistered SEI as ascii character when possible",
+        OFFSET(udu_sei_as_ascii), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VF },
     { NULL }
 };
 
@@ -69,26 +73,14 @@ static void dump_spherical(AVFilterContext *ctx, AVFrame *frame, const AVFrameSi
     const AVSphericalMapping *spherical = (const AVSphericalMapping *)sd->data;
     double yaw, pitch, roll;
 
-    if (sd->size < sizeof(*spherical)) {
-        av_log(ctx, AV_LOG_ERROR, "invalid data\n");
-        return;
-    }
+    av_log(ctx, AV_LOG_INFO, "%s ", av_spherical_projection_name(spherical->projection));
 
-    if (spherical->projection == AV_SPHERICAL_EQUIRECTANGULAR)
-        av_log(ctx, AV_LOG_INFO, "equirectangular ");
-    else if (spherical->projection == AV_SPHERICAL_CUBEMAP)
-        av_log(ctx, AV_LOG_INFO, "cubemap ");
-    else if (spherical->projection == AV_SPHERICAL_EQUIRECTANGULAR_TILE)
-        av_log(ctx, AV_LOG_INFO, "tiled equirectangular ");
-    else {
-        av_log(ctx, AV_LOG_WARNING, "unknown\n");
-        return;
+    if (spherical->yaw || spherical->pitch || spherical->roll) {
+        yaw = ((double)spherical->yaw) / (1 << 16);
+        pitch = ((double)spherical->pitch) / (1 << 16);
+        roll = ((double)spherical->roll) / (1 << 16);
+        av_log(ctx, AV_LOG_INFO, "(%f/%f/%f) ", yaw, pitch, roll);
     }
-
-    yaw = ((double)spherical->yaw) / (1 << 16);
-    pitch = ((double)spherical->pitch) / (1 << 16);
-    roll = ((double)spherical->roll) / (1 << 16);
-    av_log(ctx, AV_LOG_INFO, "(%f/%f/%f) ", yaw, pitch, roll);
 
     if (spherical->projection == AV_SPHERICAL_EQUIRECTANGULAR_TILE) {
         size_t l, t, r, b;
@@ -104,23 +96,27 @@ static void dump_spherical(AVFilterContext *ctx, AVFrame *frame, const AVFrameSi
 
 static void dump_stereo3d(AVFilterContext *ctx, const AVFrameSideData *sd)
 {
-    const AVStereo3D *stereo;
-
-    if (sd->size < sizeof(*stereo)) {
-        av_log(ctx, AV_LOG_ERROR, "invalid data\n");
-        return;
-    }
-
-    stereo = (const AVStereo3D *)sd->data;
+    const AVStereo3D *stereo = (const AVStereo3D *)sd->data;
 
     av_log(ctx, AV_LOG_INFO, "type - %s", av_stereo3d_type_name(stereo->type));
 
     if (stereo->flags & AV_STEREO3D_FLAG_INVERT)
         av_log(ctx, AV_LOG_INFO, " (inverted)");
+
+    av_log(ctx, AV_LOG_INFO, ", view - %s, primary_eye - %s", av_stereo3d_view_name(stereo->view),
+                                                              av_stereo3d_primary_eye_name(stereo->primary_eye));
+    if (stereo->baseline)
+        av_log(ctx, AV_LOG_INFO, ", baseline: %"PRIu32"", stereo->baseline);
+    if (stereo->horizontal_disparity_adjustment.num && stereo->horizontal_disparity_adjustment.den)
+        av_log(ctx, AV_LOG_INFO, ", horizontal_disparity_adjustment: %0.4f",
+               av_q2d(stereo->horizontal_disparity_adjustment));
+    if (stereo->horizontal_field_of_view.num && stereo->horizontal_field_of_view.den)
+        av_log(ctx, AV_LOG_INFO, ", horizontal_field_of_view: %0.3f", av_q2d(stereo->horizontal_field_of_view));
 }
 
-static void dump_s12m_timecode(AVFilterContext *ctx, AVRational frame_rate, const AVFrameSideData *sd)
+static void dump_s12m_timecode(AVFilterContext *ctx, AVFilterLink *inlink, const AVFrameSideData *sd)
 {
+    FilterLink      *l = ff_filter_link(inlink);
     const uint32_t *tc = (const uint32_t *)sd->data;
 
     if ((sd->size != sizeof(uint32_t) * 4) || (tc[0] > 3)) {
@@ -130,7 +126,7 @@ static void dump_s12m_timecode(AVFilterContext *ctx, AVRational frame_rate, cons
 
     for (int j = 1; j <= tc[0]; j++) {
         char tcbuf[AV_TIMECODE_STR_SIZE];
-        av_timecode_make_smpte_tc_string2(tcbuf, frame_rate, tc[j], 0, 0);
+        av_timecode_make_smpte_tc_string2(tcbuf, l->frame_rate, tc[j], 0, 0);
         av_log(ctx, AV_LOG_INFO, "timecode - %s%s", tcbuf, j != tc[0]  ? ", " : "");
     }
 }
@@ -418,6 +414,7 @@ static void dump_video_enc_params(AVFilterContext *ctx, const AVFrameSideData *s
 static void dump_sei_unregistered_metadata(AVFilterContext *ctx, const AVFrameSideData *sd)
 {
     const uint8_t *user_data = sd->data;
+    ShowInfoContext *s = ctx->priv;
 
     if (sd->size < AV_UUID_LEN) {
         av_log(ctx, AV_LOG_ERROR, "invalid data(%"SIZE_SPECIFIER" < "
@@ -428,8 +425,13 @@ static void dump_sei_unregistered_metadata(AVFilterContext *ctx, const AVFrameSi
     av_log(ctx, AV_LOG_INFO, "UUID=" AV_PRI_UUID "\n", AV_UUID_ARG(user_data));
 
     av_log(ctx, AV_LOG_INFO, "User Data=");
-    for (size_t i = 16; i < sd->size; i++)
-        av_log(ctx, AV_LOG_INFO, "%02x", user_data[i]);
+    for (size_t i = 16; i < sd->size; i++) {
+        const char *format = "%02x";
+
+        if (s->udu_sei_as_ascii)
+            format = isprint(user_data[i]) ? "%c" : "\\x%02x";
+        av_log(ctx, AV_LOG_INFO, format, user_data[i]);
+    }
     av_log(ctx, AV_LOG_INFO, "\n");
 }
 
@@ -442,6 +444,11 @@ static void dump_sei_film_grain_params_metadata(AVFilterContext *ctx, const AVFr
         [AV_FILM_GRAIN_PARAMS_H274] = "h274",
     };
 
+    const char *color_range_str     = av_color_range_name(fgp->color_range);
+    const char *color_primaries_str = av_color_primaries_name(fgp->color_primaries);
+    const char *color_trc_str       = av_color_transfer_name(fgp->color_trc);
+    const char *colorspace_str      = av_color_space_name(fgp->color_space);
+
     if (fgp->type >= FF_ARRAY_ELEMS(film_grain_type_names)) {
         av_log(ctx, AV_LOG_ERROR, "invalid data\n");
         return;
@@ -449,25 +456,62 @@ static void dump_sei_film_grain_params_metadata(AVFilterContext *ctx, const AVFr
 
     av_log(ctx, AV_LOG_INFO, "type %s; ", film_grain_type_names[fgp->type]);
     av_log(ctx, AV_LOG_INFO, "seed=%"PRIu64"; ", fgp->seed);
+    av_log(ctx, AV_LOG_INFO, "width=%d; ", fgp->width);
+    av_log(ctx, AV_LOG_INFO, "height=%d; ", fgp->height);
+    av_log(ctx, AV_LOG_INFO, "subsampling_x=%d; ", fgp->subsampling_x);
+    av_log(ctx, AV_LOG_INFO, "subsampling_y=%d; ", fgp->subsampling_y);
+    av_log(ctx, AV_LOG_INFO, "color_range=%s; ", color_range_str ? color_range_str : "unknown");
+    av_log(ctx, AV_LOG_INFO, "color_primaries=%s; ", color_primaries_str ? color_primaries_str : "unknown");
+    av_log(ctx, AV_LOG_INFO, "color_trc=%s; ", color_trc_str ? color_trc_str : "unknown");
+    av_log(ctx, AV_LOG_INFO, "color_space=%s; ", colorspace_str ? colorspace_str : "unknown");
+    av_log(ctx, AV_LOG_INFO, "bit_depth_luma=%d; ", fgp->bit_depth_luma);
+    av_log(ctx, AV_LOG_INFO, "bit_depth_chroma=%d; ", fgp->bit_depth_chroma);
 
     switch (fgp->type) {
     case AV_FILM_GRAIN_PARAMS_NONE:
-    case AV_FILM_GRAIN_PARAMS_AV1:
-        return;
+        break;
+    case AV_FILM_GRAIN_PARAMS_AV1: {
+        const AVFilmGrainAOMParams *aom = &fgp->codec.aom;
+        const int num_ar_coeffs_y = 2 * aom->ar_coeff_lag * (aom->ar_coeff_lag + 1);
+        const int num_ar_coeffs_uv = num_ar_coeffs_y + !!aom->num_y_points;
+        av_log(ctx, AV_LOG_INFO, "y_points={ ");
+        for (int i = 0; i < aom->num_y_points; i++)
+            av_log(ctx, AV_LOG_INFO, "(%d,%d) ", aom->y_points[i][0], aom->y_points[i][1]);
+        av_log(ctx, AV_LOG_INFO, "}; chroma_scaling_from_luma=%d; ", aom->chroma_scaling_from_luma);
+        for (int uv = 0; uv < 2; uv++) {
+            av_log(ctx, AV_LOG_INFO, "uv_points[%d]={ ", uv);
+            for (int i = 0; i < aom->num_uv_points[uv]; i++)
+                av_log(ctx, AV_LOG_INFO, "(%d,%d) ", aom->uv_points[uv][i][0], aom->uv_points[uv][i][1]);
+            av_log(ctx, AV_LOG_INFO, "}; ");
+        }
+        av_log(ctx, AV_LOG_INFO, "scaling_shift=%d; ", aom->scaling_shift);
+        av_log(ctx, AV_LOG_INFO, "ar_coeff_lag=%d; ", aom->ar_coeff_lag);
+        if (num_ar_coeffs_y) {
+            av_log(ctx, AV_LOG_INFO, "ar_coeffs_y={ ");
+            for (int i = 0; i < num_ar_coeffs_y; i++)
+                av_log(ctx, AV_LOG_INFO, "%d ", aom->ar_coeffs_y[i]);
+            av_log(ctx, AV_LOG_INFO, "}; ");
+        }
+        for (int uv = 0; num_ar_coeffs_uv && uv < 2; uv++) {
+            av_log(ctx, AV_LOG_INFO, "ar_coeffs_uv[%d]={ ", uv);
+            for (int i = 0; i < num_ar_coeffs_uv; i++)
+                av_log(ctx, AV_LOG_INFO, "%d ", aom->ar_coeffs_uv[uv][i]);
+            av_log(ctx, AV_LOG_INFO, "}; ");
+        }
+        av_log(ctx, AV_LOG_INFO, "ar_coeff_shift=%d; ", aom->ar_coeff_shift);
+        av_log(ctx, AV_LOG_INFO, "grain_scale_shift=%d; ", aom->grain_scale_shift);
+        for (int uv = 0; uv < 2; uv++) {
+            av_log(ctx, AV_LOG_INFO, "uv_mult[%d] = %d; ", uv, aom->uv_mult[uv]);
+            av_log(ctx, AV_LOG_INFO, "uv_mult_luma[%d] = %d; ", uv, aom->uv_mult_luma[uv]);
+            av_log(ctx, AV_LOG_INFO, "uv_offset[%d] = %d; ", uv, aom->uv_offset[uv]);
+        }
+        av_log(ctx, AV_LOG_INFO, "overlap_flag=%d; ", aom->overlap_flag);
+        av_log(ctx, AV_LOG_INFO, "limit_output_range=%d; ", aom->limit_output_range);
+        break;
+    }
     case AV_FILM_GRAIN_PARAMS_H274: {
         const AVFilmGrainH274Params *h274 = &fgp->codec.h274;
-        const char *color_range_str     = av_color_range_name(h274->color_range);
-        const char *color_primaries_str = av_color_primaries_name(h274->color_primaries);
-        const char *color_trc_str       = av_color_transfer_name(h274->color_trc);
-        const char *colorspace_str      = av_color_space_name(h274->color_space);
-
         av_log(ctx, AV_LOG_INFO, "model_id=%d; ", h274->model_id);
-        av_log(ctx, AV_LOG_INFO, "bit_depth_luma=%d; ", h274->bit_depth_luma);
-        av_log(ctx, AV_LOG_INFO, "bit_depth_chroma=%d; ", h274->bit_depth_chroma);
-        av_log(ctx, AV_LOG_INFO, "color_range=%s; ", color_range_str ? color_range_str : "unknown");
-        av_log(ctx, AV_LOG_INFO, "color_primaries=%s; ", color_primaries_str ? color_primaries_str : "unknown");
-        av_log(ctx, AV_LOG_INFO, "color_trc=%s; ", color_trc_str ? color_trc_str : "unknown");
-        av_log(ctx, AV_LOG_INFO, "color_space=%s; ", colorspace_str ? colorspace_str : "unknown");
         av_log(ctx, AV_LOG_INFO, "blending_mode_id=%d; ", h274->blending_mode_id);
         av_log(ctx, AV_LOG_INFO, "log2_scale_factor=%d; ", h274->log2_scale_factor);
 
@@ -683,6 +727,7 @@ static void update_sample_stats(int depth, int be, const uint8_t *src, int len, 
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
+    FilterLink *inl = ff_filter_link(inlink);
     AVFilterContext *ctx = inlink->dst;
     ShowInfoContext *s = ctx->priv;
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(inlink->format);
@@ -716,7 +761,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
            "n:%4"PRId64" pts:%7s pts_time:%-7s duration:%7"PRId64
            " duration_time:%-7s "
            "fmt:%s cl:%s sar:%d/%d s:%dx%d i:%c iskey:%d type:%c ",
-           inlink->frame_count_out,
+           inl->frame_count_out,
            av_ts2str(frame->pts), av_ts2timestr(frame->pts, &inlink->time_base),
            frame->duration, av_ts2timestr(frame->duration, &inlink->time_base),
            desc->name, av_chroma_location_name(frame->chroma_location),
@@ -763,7 +808,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
             dump_stereo3d(ctx, sd);
             break;
         case AV_FRAME_DATA_S12M_TIMECODE: {
-            dump_s12m_timecode(ctx, inlink->frame_rate, sd);
+            dump_s12m_timecode(ctx, inlink, sd);
             break;
         }
         case AV_FRAME_DATA_DISPLAYMATRIX:
@@ -812,6 +857,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
         case AV_FRAME_DATA_AMBIENT_VIEWING_ENVIRONMENT:
             dump_ambient_viewing_environment(ctx, sd);
             break;
+        case AV_FRAME_DATA_VIEW_ID:
+            av_log(ctx, AV_LOG_INFO, "view id: %d\n", *(int*)sd->data);
+            break;
         default:
             if (name)
                 av_log(ctx, AV_LOG_INFO,
@@ -832,11 +880,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 
 static int config_props(AVFilterContext *ctx, AVFilterLink *link, int is_out)
 {
+    FilterLink *l = ff_filter_link(link);
 
     av_log(ctx, AV_LOG_INFO, "config %s time_base: %d/%d, frame_rate: %d/%d\n",
            is_out ? "out" : "in",
            link->time_base.num, link->time_base.den,
-           link->frame_rate.num, link->frame_rate.den);
+           l->frame_rate.num, l->frame_rate.den);
 
     return 0;
 }

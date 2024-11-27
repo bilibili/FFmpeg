@@ -26,11 +26,12 @@
 #include "libavutil/avassert.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "avfilter.h"
+#include "filters.h"
 #include "framesync.h"
-#include "internal.h"
 #include "video.h"
 
 enum MorphModes {
@@ -128,18 +129,18 @@ typedef struct MorphoContext {
 #define FLAGS AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_RUNTIME_PARAM
 
 static const AVOption morpho_options[] = {
-    { "mode",  "set morphological transform",                 OFFSET(mode),       AV_OPT_TYPE_INT,   {.i64=0}, 0, NB_MODES-1, FLAGS, "mode" },
-    { "erode",  NULL,                                         0,                  AV_OPT_TYPE_CONST, {.i64=ERODE},  0,  0, FLAGS, "mode" },
-    { "dilate", NULL,                                         0,                  AV_OPT_TYPE_CONST, {.i64=DILATE}, 0,  0, FLAGS, "mode" },
-    { "open",   NULL,                                         0,                  AV_OPT_TYPE_CONST, {.i64=OPEN},   0,  0, FLAGS, "mode" },
-    { "close",  NULL,                                         0,                  AV_OPT_TYPE_CONST, {.i64=CLOSE},  0,  0, FLAGS, "mode" },
-    { "gradient",NULL,                                        0,                  AV_OPT_TYPE_CONST, {.i64=GRADIENT},0, 0, FLAGS, "mode" },
-    { "tophat",NULL,                                          0,                  AV_OPT_TYPE_CONST, {.i64=TOPHAT},  0, 0, FLAGS, "mode" },
-    { "blackhat",NULL,                                        0,                  AV_OPT_TYPE_CONST, {.i64=BLACKHAT},0, 0, FLAGS, "mode" },
+    { "mode",  "set morphological transform",                 OFFSET(mode),       AV_OPT_TYPE_INT,   {.i64=0}, 0, NB_MODES-1, FLAGS, .unit = "mode" },
+    { "erode",  NULL,                                         0,                  AV_OPT_TYPE_CONST, {.i64=ERODE},  0,  0, FLAGS, .unit = "mode" },
+    { "dilate", NULL,                                         0,                  AV_OPT_TYPE_CONST, {.i64=DILATE}, 0,  0, FLAGS, .unit = "mode" },
+    { "open",   NULL,                                         0,                  AV_OPT_TYPE_CONST, {.i64=OPEN},   0,  0, FLAGS, .unit = "mode" },
+    { "close",  NULL,                                         0,                  AV_OPT_TYPE_CONST, {.i64=CLOSE},  0,  0, FLAGS, .unit = "mode" },
+    { "gradient",NULL,                                        0,                  AV_OPT_TYPE_CONST, {.i64=GRADIENT},0, 0, FLAGS, .unit = "mode" },
+    { "tophat",NULL,                                          0,                  AV_OPT_TYPE_CONST, {.i64=TOPHAT},  0, 0, FLAGS, .unit = "mode" },
+    { "blackhat",NULL,                                        0,                  AV_OPT_TYPE_CONST, {.i64=BLACKHAT},0, 0, FLAGS, .unit = "mode" },
     { "planes",  "set planes to filter",                      OFFSET(planes),     AV_OPT_TYPE_INT,   {.i64=7}, 0, 15, FLAGS },
-    { "structure", "when to process structures",              OFFSET(structures), AV_OPT_TYPE_INT,   {.i64=1}, 0,  1, FLAGS, "str" },
-    {   "first", "process only first structure, ignore rest", 0,                  AV_OPT_TYPE_CONST, {.i64=0}, 0,  0, FLAGS, "str" },
-    {   "all",   "process all structure",                     0,                  AV_OPT_TYPE_CONST, {.i64=1}, 0,  0, FLAGS, "str" },
+    { "structure", "when to process structures",              OFFSET(structures), AV_OPT_TYPE_INT,   {.i64=1}, 0,  1, FLAGS, .unit = "str" },
+    {   "first", "process only first structure, ignore rest", 0,                  AV_OPT_TYPE_CONST, {.i64=0}, 0,  0, FLAGS, .unit = "str" },
+    {   "all",   "process all structure",                     0,                  AV_OPT_TYPE_CONST, {.i64=1}, 0,  0, FLAGS, .unit = "str" },
     { NULL }
 };
 
@@ -1001,6 +1002,8 @@ static int config_output(AVFilterLink *outlink)
     AVFilterContext *ctx = outlink->src;
     MorphoContext *s = ctx->priv;
     AVFilterLink *mainlink = ctx->inputs[0];
+    FilterLink *il = ff_filter_link(mainlink);
+    FilterLink *ol = ff_filter_link(outlink);
     int ret;
 
     s->fs.on_event = do_morpho;
@@ -1011,7 +1014,7 @@ static int config_output(AVFilterLink *outlink)
     outlink->h = mainlink->h;
     outlink->time_base = mainlink->time_base;
     outlink->sample_aspect_ratio = mainlink->sample_aspect_ratio;
-    outlink->frame_rate = mainlink->frame_rate;
+    ol->frame_rate = il->frame_rate;
 
     if ((ret = ff_framesync_configure(&s->fs)) < 0)
         return ret;

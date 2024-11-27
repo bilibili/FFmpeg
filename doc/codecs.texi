@@ -3,7 +3,7 @@
 @c man begin CODEC OPTIONS
 
 libavcodec provides some generic global options, which can be set on
-all the encoders and decoders. In addition each codec may support
+all the encoders and decoders. In addition, each codec may support
 so-called private options, which are specific for a given codec.
 
 Sometimes, a global option may only affect a specific kind of codec,
@@ -767,15 +767,9 @@ Set rate-distortion optimal quantization.
 @item compression_level @var{integer} (@emph{encoding,audio,video})
 @item bits_per_raw_sample @var{integer}
 @item channel_layout @var{integer} (@emph{decoding/encoding,audio})
+See @ref{channel layout syntax,,the Channel Layout section in the ffmpeg-utils(1) manual,ffmpeg-utils}
+for the required syntax.
 
-Possible values:
-@table @samp
-@end table
-@item request_channel_layout @var{integer} (@emph{decoding,audio})
-
-Possible values:
-@table @samp
-@end table
 @item rc_max_vbv_use @var{float} (@emph{encoding,video})
 @item rc_min_vbv_use @var{float} (@emph{encoding,video})
 

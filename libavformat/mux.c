@@ -27,6 +27,7 @@
 #include "libavcodec/codec_desc.h"
 #include "libavcodec/internal.h"
 #include "libavcodec/packet_internal.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/dict.h"
 #include "libavutil/timestamp.h"
@@ -188,6 +189,12 @@ static int init_muxer(AVFormatContext *s, AVDictionary **options)
     AVDictionary *tmp = NULL;
     const FFOutputFormat *of = ffofmt(s->oformat);
     AVDictionaryEntry *e;
+    static const unsigned default_codec_offsets[] = {
+        [AVMEDIA_TYPE_VIDEO]    = offsetof(AVOutputFormat, video_codec),
+        [AVMEDIA_TYPE_AUDIO]    = offsetof(AVOutputFormat, audio_codec),
+        [AVMEDIA_TYPE_SUBTITLE] = offsetof(AVOutputFormat, subtitle_codec),
+    };
+    unsigned nb_type[FF_ARRAY_ELEMS(default_codec_offsets)] = { 0 };
     int ret = 0;
 
     if (options)
@@ -233,22 +240,6 @@ static int init_muxer(AVFormatContext *s, AVDictionary **options)
                 goto fail;
             }
 
-#if FF_API_OLD_CHANNEL_LAYOUT
-FF_DISABLE_DEPRECATION_WARNINGS
-            /* if the caller is using the deprecated channel layout API,
-             * convert it to the new style */
-            if (!par->ch_layout.nb_channels &&
-                par->channels) {
-                if (par->channel_layout) {
-                    av_channel_layout_from_mask(&par->ch_layout, par->channel_layout);
-                } else {
-                    par->ch_layout.order       = AV_CHANNEL_ORDER_UNSPEC;
-                    par->ch_layout.nb_channels = par->channels;
-                }
-            }
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-
             if (!par->block_align)
                 par->block_align = par->ch_layout.nb_channels *
                                    av_get_bits_per_sample(par->codec_id) >> 3;
@@ -277,6 +268,30 @@ FF_ENABLE_DEPRECATION_WARNINGS
                 }
             }
             break;
+        }
+        if (of->flags_internal & (FF_OFMT_FLAG_MAX_ONE_OF_EACH | FF_OFMT_FLAG_ONLY_DEFAULT_CODECS)) {
+            enum AVCodecID default_codec_id = AV_CODEC_ID_NONE;
+            unsigned nb;
+            if ((unsigned)par->codec_type < FF_ARRAY_ELEMS(default_codec_offsets)) {
+                nb = ++nb_type[par->codec_type];
+                if (default_codec_offsets[par->codec_type])
+                    default_codec_id = *(const enum AVCodecID*)((const char*)of + default_codec_offsets[par->codec_type]);
+            }
+            if (of->flags_internal & FF_OFMT_FLAG_ONLY_DEFAULT_CODECS &&
+                default_codec_id != AV_CODEC_ID_NONE && par->codec_id != default_codec_id) {
+                av_log(s, AV_LOG_ERROR, "%s muxer supports only codec %s for type %s\n",
+                       of->p.name, avcodec_get_name(default_codec_id), av_get_media_type_string(par->codec_type));
+                ret = AVERROR(EINVAL);
+                goto fail;
+            } else if (default_codec_id == AV_CODEC_ID_NONE ||
+                       (of->flags_internal & FF_OFMT_FLAG_MAX_ONE_OF_EACH && nb > 1)) {
+                const char *type = av_get_media_type_string(par->codec_type);
+                av_log(s, AV_LOG_ERROR, "%s muxer does not support %s stream of type %s\n",
+                       of->p.name, default_codec_id == AV_CODEC_ID_NONE ? "any" : "more than one",
+                       type ? type : "unknown");
+                ret = AVERROR(EINVAL);
+                goto fail;
+            }
         }
 
 #if FF_API_AVSTREAM_SIDE_DATA
@@ -406,16 +421,11 @@ static int init_pts(AVFormatContext *s)
             break;
         }
 
-        if (!sti->priv_pts)
-            sti->priv_pts = av_mallocz(sizeof(*sti->priv_pts));
-        if (!sti->priv_pts)
-            return AVERROR(ENOMEM);
-
         if (den != AV_NOPTS_VALUE) {
             if (den <= 0)
                 return AVERROR_INVALIDDATA;
 
-            frac_init(sti->priv_pts, 0, 0, den);
+            frac_init(&sti->priv_pts, 0, 0, den);
         }
     }
 
@@ -550,7 +560,7 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
         }
         pkt->dts =
 //        pkt->pts= st->cur_dts;
-            pkt->pts = sti->priv_pts->val;
+            pkt->pts = sti->priv_pts.val;
     }
 
     //calculate dts from pts
@@ -587,7 +597,7 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
             av_ts2str(pkt->pts), av_ts2str(pkt->dts));
 
     sti->cur_dts      = pkt->dts;
-    sti->priv_pts->val = pkt->dts;
+    sti->priv_pts.val = pkt->dts;
 
     /* update pts */
     switch (st->codecpar->codec_type) {
@@ -599,12 +609,12 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
         /* HACK/FIXME, we skip the initial 0 size packets as they are most
          * likely equal to the encoder delay, but it would be better if we
          * had the real timestamps from the encoder */
-        if (frame_size >= 0 && (pkt->size || sti->priv_pts->num != sti->priv_pts->den >> 1 || sti->priv_pts->val)) {
-            frac_add(sti->priv_pts, (int64_t)st->time_base.den * frame_size);
+        if (frame_size >= 0 && (pkt->size || sti->priv_pts.num != sti->priv_pts.den >> 1 || sti->priv_pts.val)) {
+            frac_add(&sti->priv_pts, (int64_t)st->time_base.den * frame_size);
         }
         break;
     case AVMEDIA_TYPE_VIDEO:
-        frac_add(sti->priv_pts, (int64_t)st->time_base.den * st->time_base.num);
+        frac_add(&sti->priv_pts, (int64_t)st->time_base.den * st->time_base.num);
         break;
     }
     return 0;
@@ -995,7 +1005,7 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
             const PacketListEntry *const last = sti->last_in_packet_buffer;
             int64_t last_dts;
 
-            if (!last)
+            if (!last || st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
                 continue;
 
             last_dts = av_rescale_q(last->pkt.dts,
@@ -1227,13 +1237,7 @@ int av_write_frame(AVFormatContext *s, AVPacket *in)
     int ret;
 
     if (!in) {
-#if FF_API_ALLOW_FLUSH || LIBAVFORMAT_VERSION_MAJOR >= 61
-        // Hint: The pulse audio output device has this set,
-        // so we can't switch the check to FF_FMT_ALLOW_FLUSH immediately.
-        if (s->oformat->flags & AVFMT_ALLOW_FLUSH) {
-#else
-        if (ffofmt(s->oformat)->flags_internal & FF_FMT_ALLOW_FLUSH) {
-#endif
+        if (ffofmt(s->oformat)->flags_internal & FF_OFMT_FLAG_ALLOW_FLUSH) {
             ret = ffofmt(s->oformat)->write_packet(s, NULL);
             flush_if_needed(s);
             if (ret >= 0 && s->pb && s->pb->error < 0)
@@ -1457,13 +1461,6 @@ static int write_uncoded_frame_internal(AVFormatContext *s, int stream_index,
         pkt->size         = sizeof(frame);
         pkt->pts          =
         pkt->dts          = frame->pts;
-#if FF_API_PKT_DURATION
-FF_DISABLE_DEPRECATION_WARNINGS
-        if (frame->pkt_duration)
-            pkt->duration     = frame->pkt_duration;
-        else
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
         pkt->duration = frame->duration;
         pkt->stream_index = stream_index;
         pkt->flags |= AV_PKT_FLAG_UNCODED_FRAME;

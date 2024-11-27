@@ -31,14 +31,12 @@
 #include "libavutil/avassert.h"
 #include "libavutil/thread.h"
 
-#include "avcodec.h"
 #include "mpegvideo.h"
-#include "mpeg12.h"
 #include "mpeg12codecs.h"
 #include "mpeg12data.h"
 #include "mpeg12dec.h"
+#include "mpegutils.h"
 #include "rl.h"
-#include "startcode.h"
 
 static const uint8_t table_mb_ptype[7][2] = {
     { 3, 5 }, // 0x01 MB_INTRA
@@ -62,6 +60,30 @@ static const uint8_t table_mb_btype[11][2] = {
     { 2, 6 }, // 0x16 MB_QUANT|MB_BACK|MB_PAT
     { 3, 6 }, // 0x1A MB_QUANT|MB_FOR|MB_PAT
     { 2, 5 }, // 0x1E MB_QUANT|MB_FOR|MB_BACK|MB_PAT
+};
+
+static const int16_t ptype2mb_type[7] = {
+                    MB_TYPE_INTRA,
+                    MB_TYPE_FORWARD_MV | MB_TYPE_CBP | MB_TYPE_ZERO_MV | MB_TYPE_16x16,
+                    MB_TYPE_FORWARD_MV,
+                    MB_TYPE_FORWARD_MV | MB_TYPE_CBP,
+    MB_TYPE_QUANT | MB_TYPE_INTRA,
+    MB_TYPE_QUANT | MB_TYPE_FORWARD_MV | MB_TYPE_CBP | MB_TYPE_ZERO_MV | MB_TYPE_16x16,
+    MB_TYPE_QUANT | MB_TYPE_FORWARD_MV | MB_TYPE_CBP,
+};
+
+static const int16_t btype2mb_type[11] = {
+                    MB_TYPE_INTRA,
+                    MB_TYPE_BACKWARD_MV,
+                    MB_TYPE_BACKWARD_MV | MB_TYPE_CBP,
+                    MB_TYPE_FORWARD_MV,
+                    MB_TYPE_FORWARD_MV  | MB_TYPE_CBP,
+                    MB_TYPE_BIDIR_MV,
+                    MB_TYPE_BIDIR_MV    | MB_TYPE_CBP,
+    MB_TYPE_QUANT | MB_TYPE_INTRA,
+    MB_TYPE_QUANT | MB_TYPE_BACKWARD_MV | MB_TYPE_CBP,
+    MB_TYPE_QUANT | MB_TYPE_FORWARD_MV  | MB_TYPE_CBP,
+    MB_TYPE_QUANT | MB_TYPE_BIDIR_MV    | MB_TYPE_CBP,
 };
 
 av_cold void ff_init_2d_vlc_rl(const uint16_t table_vlc[][2], RL_VLC_ELEM rl_vlc[],
@@ -115,43 +137,45 @@ void ff_mpeg1_clean_buffers(MpegEncContext *s)
 /******************************************/
 /* decoding */
 
-VLC ff_mv_vlc;
+VLCElem ff_mv_vlc[266];
 
-VLC ff_dc_lum_vlc;
-VLC ff_dc_chroma_vlc;
+VLCElem ff_dc_lum_vlc[512];
+VLCElem ff_dc_chroma_vlc[514];
 
-VLC ff_mbincr_vlc;
-VLC ff_mb_ptype_vlc;
-VLC ff_mb_btype_vlc;
-VLC ff_mb_pat_vlc;
+VLCElem ff_mbincr_vlc[538];
+VLCElem ff_mb_ptype_vlc[64];
+VLCElem ff_mb_btype_vlc[64];
+VLCElem ff_mb_pat_vlc[512];
 
 RL_VLC_ELEM ff_mpeg1_rl_vlc[680];
 RL_VLC_ELEM ff_mpeg2_rl_vlc[674];
 
 static av_cold void mpeg12_init_vlcs(void)
 {
-    VLC_INIT_STATIC(&ff_dc_lum_vlc, DC_VLC_BITS, 12,
-                    ff_mpeg12_vlc_dc_lum_bits, 1, 1,
-                    ff_mpeg12_vlc_dc_lum_code, 2, 2, 512);
-    VLC_INIT_STATIC(&ff_dc_chroma_vlc,  DC_VLC_BITS, 12,
-                    ff_mpeg12_vlc_dc_chroma_bits, 1, 1,
-                    ff_mpeg12_vlc_dc_chroma_code, 2, 2, 514);
-    VLC_INIT_STATIC(&ff_mv_vlc, MV_VLC_BITS, 17,
-                    &ff_mpeg12_mbMotionVectorTable[0][1], 2, 1,
-                    &ff_mpeg12_mbMotionVectorTable[0][0], 2, 1, 266);
-    VLC_INIT_STATIC(&ff_mbincr_vlc, MBINCR_VLC_BITS, 36,
-                    &ff_mpeg12_mbAddrIncrTable[0][1], 2, 1,
-                    &ff_mpeg12_mbAddrIncrTable[0][0], 2, 1, 538);
-    VLC_INIT_STATIC(&ff_mb_pat_vlc, MB_PAT_VLC_BITS, 64,
-                    &ff_mpeg12_mbPatTable[0][1], 2, 1,
-                    &ff_mpeg12_mbPatTable[0][0], 2, 1, 512);
+    VLC_INIT_STATIC_TABLE(ff_dc_lum_vlc, DC_VLC_BITS, 12,
+                          ff_mpeg12_vlc_dc_lum_bits, 1, 1,
+                          ff_mpeg12_vlc_dc_lum_code, 2, 2, 0);
+    VLC_INIT_STATIC_TABLE(ff_dc_chroma_vlc,  DC_VLC_BITS, 12,
+                          ff_mpeg12_vlc_dc_chroma_bits, 1, 1,
+                          ff_mpeg12_vlc_dc_chroma_code, 2, 2, 0);
+    VLC_INIT_STATIC_TABLE(ff_mv_vlc, MV_VLC_BITS, 17,
+                          &ff_mpeg12_mbMotionVectorTable[0][1], 2, 1,
+                          &ff_mpeg12_mbMotionVectorTable[0][0], 2, 1, 0);
+    VLC_INIT_STATIC_TABLE(ff_mbincr_vlc, MBINCR_VLC_BITS, 36,
+                          &ff_mpeg12_mbAddrIncrTable[0][1], 2, 1,
+                          &ff_mpeg12_mbAddrIncrTable[0][0], 2, 1, 0);
+    VLC_INIT_STATIC_TABLE(ff_mb_pat_vlc, MB_PAT_VLC_BITS, 64,
+                          &ff_mpeg12_mbPatTable[0][1], 2, 1,
+                          &ff_mpeg12_mbPatTable[0][0], 2, 1, 0);
 
-    VLC_INIT_STATIC(&ff_mb_ptype_vlc, MB_PTYPE_VLC_BITS, 7,
-                    &table_mb_ptype[0][1], 2, 1,
-                    &table_mb_ptype[0][0], 2, 1, 64);
-    VLC_INIT_STATIC(&ff_mb_btype_vlc, MB_BTYPE_VLC_BITS, 11,
-                    &table_mb_btype[0][1], 2, 1,
-                    &table_mb_btype[0][0], 2, 1, 64);
+    VLC_INIT_STATIC_SPARSE_TABLE(ff_mb_ptype_vlc, MB_PTYPE_VLC_BITS, 7,
+                                 &table_mb_ptype[0][1], 2, 1,
+                                 &table_mb_ptype[0][0], 2, 1,
+                                 ptype2mb_type, 2, 2, 0);
+    VLC_INIT_STATIC_SPARSE_TABLE(ff_mb_btype_vlc, MB_BTYPE_VLC_BITS, 11,
+                                 &table_mb_btype[0][1], 2, 1,
+                                 &table_mb_btype[0][0], 2, 1,
+                                 btype2mb_type, 2, 2, 0);
 
     ff_init_2d_vlc_rl(ff_mpeg1_vlc_table, ff_mpeg1_rl_vlc, ff_mpeg12_run,
                       ff_mpeg12_level, MPEG12_RL_NB_ELEMS,
@@ -180,8 +204,6 @@ int ff_mpeg1_decode_block_intra(GetBitContext *gb,
     component = index <= 3 ? 0 : index - 4 + 1;
 
     diff = decode_dc(gb, component);
-    if (diff >= 0xffff)
-        return AVERROR_INVALIDDATA;
 
     dc  = last_dc[component];
     dc += diff;

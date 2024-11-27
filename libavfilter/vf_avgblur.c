@@ -22,10 +22,11 @@
 
 #include "libavutil/avassert.h"
 #include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "avfilter.h"
-#include "internal.h"
+#include "filters.h"
 #include "video.h"
 
 typedef struct AverageBlurContext {
@@ -287,7 +288,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         const int width = s->planewidth[plane];
 
         if (!(s->planes & (1 << plane))) {
-            if (out != in)
+            if (out->data[plane] != in->data[plane])
                 av_image_copy_plane(out->data[plane], out->linesize[plane],
                                     in->data[plane], in->linesize[plane],
                                     width * ((s->depth + 7) / 8), height);

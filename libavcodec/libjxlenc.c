@@ -31,6 +31,7 @@
 #include "libavutil/error.h"
 #include "libavutil/frame.h"
 #include "libavutil/libm.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/pixfmt.h"
@@ -52,6 +53,7 @@ typedef struct LibJxlEncodeContext {
     int effort;
     float distance;
     int modular;
+    int xyb;
     uint8_t *buffer;
     size_t buffer_size;
 } LibJxlEncodeContext;
@@ -85,8 +87,8 @@ static float quality_to_distance(float quality)
 }
 
 /**
- * Initalize the decoder on a per-frame basis. All of these need to be set
- * once each time the decoder is reset, which it must be each frame to make
+ * Initalize the encoder on a per-frame basis. All of these need to be set
+ * once each time the encoder is reset, which it must be each frame to make
  * the image2 muxer work.
  *
  * @return       0 upon success, negative on failure.
@@ -104,7 +106,7 @@ static int libjxl_init_jxl_encoder(AVCodecContext *avctx)
         return AVERROR_EXTERNAL;
     }
 
-    /* This needs to be set each time the decoder is reset */
+    /* This needs to be set each time the encoder is reset */
     if (JxlEncoderSetParallelRunner(ctx->encoder, JxlThreadParallelRunner, ctx->runner)
             != JXL_ENC_SUCCESS) {
         av_log(avctx, AV_LOG_ERROR, "Failed to set JxlThreadParallelRunner\n");
@@ -259,6 +261,7 @@ static int libjxl_encode_frame(AVCodecContext *avctx, AVPacket *pkt, const AVFra
     size_t available = ctx->buffer_size;
     size_t bytes_written = 0;
     uint8_t *next_out = ctx->buffer;
+    const uint8_t *data;
 
     ret = libjxl_init_jxl_encoder(avctx);
     if (ret) {
@@ -302,7 +305,8 @@ static int libjxl_encode_frame(AVCodecContext *avctx, AVPacket *pkt, const AVFra
         av_log(avctx, AV_LOG_WARNING, "Unknown color range, assuming full (pc)\n");
 
     /* bitexact lossless requires there to be no XYB transform */
-    info.uses_original_profile = ctx->distance == 0.0;
+    info.uses_original_profile = ctx->distance == 0.0 || !ctx->xyb;
+    info.orientation = frame->linesize[0] >= 0 ? JXL_ORIENT_IDENTITY : JXL_ORIENT_FLIP_VERTICAL;
 
     if (JxlEncoderSetBasicInfo(ctx->encoder, &info) != JXL_ENC_SUCCESS) {
         av_log(avctx, AV_LOG_ERROR, "Failed to set JxlBasicInfo\n");
@@ -383,9 +387,15 @@ static int libjxl_encode_frame(AVCodecContext *avctx, AVPacket *pkt, const AVFra
     }
 
     jxl_fmt.endianness = JXL_NATIVE_ENDIAN;
-    jxl_fmt.align = frame->linesize[0];
+    if (frame->linesize[0] >= 0) {
+        jxl_fmt.align = frame->linesize[0];
+        data = frame->data[0];
+    } else {
+        jxl_fmt.align = -frame->linesize[0];
+        data = frame->data[0] + frame->linesize[0] * (info.ysize - 1);
+    }
 
-    if (JxlEncoderAddImageFrame(ctx->options, &jxl_fmt, frame->data[0], jxl_fmt.align * info.ysize) != JXL_ENC_SUCCESS) {
+    if (JxlEncoderAddImageFrame(ctx->options, &jxl_fmt, data, jxl_fmt.align * info.ysize) != JXL_ENC_SUCCESS) {
         av_log(avctx, AV_LOG_ERROR, "Failed to add Image Frame\n");
         return AVERROR_EXTERNAL;
     }
@@ -446,7 +456,7 @@ static av_cold int libjxl_encode_close(AVCodecContext *avctx)
     ctx->runner = NULL;
 
     /*
-     * destroying the decoder also frees
+     * destroying the encoder also frees
      * ctx->options so we don't need to
      */
     if (ctx->encoder)
@@ -466,6 +476,8 @@ static const AVOption libjxl_encode_options[] = {
     { "distance",      "Maximum Butteraugli distance (quality setting, "
                         "lower = better, zero = lossless, default 1.0)",   OFFSET(distance),   AV_OPT_TYPE_FLOAT,  { .dbl = -1.0 }, -1.0,  15.0, VE },
     { "modular",       "Force modular mode",                               OFFSET(modular),    AV_OPT_TYPE_INT,    { .i64 =    0 },    0,     1, VE },
+    { "xyb",           "Use XYB-encoding for lossy images",                OFFSET(xyb),
+        AV_OPT_TYPE_INT,   { .i64 =    1 },    0,     1, VE },
     { NULL },
 };
 
@@ -486,6 +498,7 @@ const FFCodec ff_libjxl_encoder = {
     FF_CODEC_ENCODE_CB(libjxl_encode_frame),
     .close            = libjxl_encode_close,
     .p.capabilities   = AV_CODEC_CAP_OTHER_THREADS |
+                        AV_CODEC_CAP_DR1 |
                         AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
     .caps_internal    = FF_CODEC_CAP_NOT_INIT_THREADSAFE |
                         FF_CODEC_CAP_AUTO_THREADS | FF_CODEC_CAP_INIT_CLEANUP |
@@ -493,6 +506,7 @@ const FFCodec ff_libjxl_encoder = {
     .p.pix_fmts       = (const enum AVPixelFormat[]) {
         AV_PIX_FMT_RGB24, AV_PIX_FMT_RGBA,
         AV_PIX_FMT_RGB48, AV_PIX_FMT_RGBA64,
+        AV_PIX_FMT_RGBF32, AV_PIX_FMT_RGBAF32,
         AV_PIX_FMT_GRAY8, AV_PIX_FMT_YA8,
         AV_PIX_FMT_GRAY16, AV_PIX_FMT_YA16,
         AV_PIX_FMT_GRAYF32,

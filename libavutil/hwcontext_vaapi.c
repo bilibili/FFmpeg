@@ -75,12 +75,22 @@ typedef struct VAAPISurfaceFormat {
 } VAAPISurfaceFormat;
 
 typedef struct VAAPIDeviceContext {
+    /**
+     * The public AVVAAPIDeviceContext. See hwcontext_vaapi.h for it.
+     */
+    AVVAAPIDeviceContext p;
+
     // Surface formats which can be used with this device.
     VAAPISurfaceFormat *formats;
     int              nb_formats;
 } VAAPIDeviceContext;
 
 typedef struct VAAPIFramesContext {
+    /**
+     * The public AVVAAPIFramesContext. See hwcontext_vaapi.h for it.
+     */
+    AVVAAPIFramesContext p;
+
     // Surface attributes set at create time.
     VASurfaceAttrib *attributes;
     int           nb_attributes;
@@ -207,7 +217,7 @@ static int vaapi_get_image_format(AVHWDeviceContext *hwdev,
                                   enum AVPixelFormat pix_fmt,
                                   VAImageFormat **image_format)
 {
-    VAAPIDeviceContext *ctx = hwdev->internal->priv;
+    VAAPIDeviceContext *ctx = hwdev->hwctx;
     int i;
 
     for (i = 0; i < ctx->nb_formats; i++) {
@@ -224,9 +234,9 @@ static int vaapi_frames_get_constraints(AVHWDeviceContext *hwdev,
                                         const void *hwconfig,
                                         AVHWFramesConstraints *constraints)
 {
-    AVVAAPIDeviceContext *hwctx = hwdev->hwctx;
+    VAAPIDeviceContext *ctx = hwdev->hwctx;
+    AVVAAPIDeviceContext *hwctx = &ctx->p;
     const AVVAAPIHWConfig *config = hwconfig;
-    VAAPIDeviceContext *ctx = hwdev->internal->priv;
     VASurfaceAttrib *attr_list = NULL;
     VAStatus vas;
     enum AVPixelFormat pix_fmt;
@@ -384,8 +394,8 @@ static const struct {
 
 static int vaapi_device_init(AVHWDeviceContext *hwdev)
 {
-    VAAPIDeviceContext *ctx = hwdev->internal->priv;
-    AVVAAPIDeviceContext *hwctx = hwdev->hwctx;
+    VAAPIDeviceContext *ctx = hwdev->hwctx;
+    AVVAAPIDeviceContext *hwctx = &ctx->p;
     VAImageFormat *image_list = NULL;
     VAStatus vas;
     const char *vendor_string;
@@ -474,7 +484,7 @@ fail:
 
 static void vaapi_device_uninit(AVHWDeviceContext *hwdev)
 {
-    VAAPIDeviceContext *ctx = hwdev->internal->priv;
+    VAAPIDeviceContext *ctx = hwdev->hwctx;
 
     av_freep(&ctx->formats);
 }
@@ -498,9 +508,9 @@ static void vaapi_buffer_free(void *opaque, uint8_t *data)
 static AVBufferRef *vaapi_pool_alloc(void *opaque, size_t size)
 {
     AVHWFramesContext     *hwfc = opaque;
-    VAAPIFramesContext     *ctx = hwfc->internal->priv;
+    VAAPIFramesContext     *ctx = hwfc->hwctx;
+    AVVAAPIFramesContext  *avfc = &ctx->p;
     AVVAAPIDeviceContext *hwctx = hwfc->device_ctx->hwctx;
-    AVVAAPIFramesContext  *avfc = hwfc->hwctx;
     VASurfaceID surface_id;
     VAStatus vas;
     AVBufferRef *ref;
@@ -541,8 +551,8 @@ static AVBufferRef *vaapi_pool_alloc(void *opaque, size_t size)
 
 static int vaapi_frames_init(AVHWFramesContext *hwfc)
 {
-    AVVAAPIFramesContext  *avfc = hwfc->hwctx;
-    VAAPIFramesContext     *ctx = hwfc->internal->priv;
+    VAAPIFramesContext     *ctx = hwfc->hwctx;
+    AVVAAPIFramesContext  *avfc = &ctx->p;
     AVVAAPIDeviceContext *hwctx = hwfc->device_ctx->hwctx;
     const VAAPIFormatDescriptor *desc;
     VAImageFormat *expected_format;
@@ -623,10 +633,10 @@ static int vaapi_frames_init(AVHWFramesContext *hwfc)
             avfc->surface_ids = NULL;
         }
 
-        hwfc->internal->pool_internal =
+        ffhwframesctx(hwfc)->pool_internal =
             av_buffer_pool_init2(sizeof(VASurfaceID), hwfc,
                                  &vaapi_pool_alloc, NULL);
-        if (!hwfc->internal->pool_internal) {
+        if (!ffhwframesctx(hwfc)->pool_internal) {
             av_log(hwfc, AV_LOG_ERROR, "Failed to create VAAPI surface pool.\n");
             err = AVERROR(ENOMEM);
             goto fail;
@@ -644,7 +654,7 @@ static int vaapi_frames_init(AVHWFramesContext *hwfc)
             goto fail;
         }
     } else {
-        test_surface = av_buffer_pool_get(hwfc->internal->pool_internal);
+        test_surface = av_buffer_pool_get(ffhwframesctx(hwfc)->pool_internal);
         if (!test_surface) {
             av_log(hwfc, AV_LOG_ERROR, "Unable to allocate a surface from "
                    "internal buffer pool.\n");
@@ -693,8 +703,8 @@ fail:
 
 static void vaapi_frames_uninit(AVHWFramesContext *hwfc)
 {
-    AVVAAPIFramesContext *avfc = hwfc->hwctx;
-    VAAPIFramesContext    *ctx = hwfc->internal->priv;
+    VAAPIFramesContext    *ctx = hwfc->hwctx;
+    AVVAAPIFramesContext *avfc = &ctx->p;
 
     av_freep(&avfc->surface_ids);
     av_freep(&ctx->attributes);
@@ -718,7 +728,7 @@ static int vaapi_transfer_get_formats(AVHWFramesContext *hwfc,
                                       enum AVHWFrameTransferDirection dir,
                                       enum AVPixelFormat **formats)
 {
-    VAAPIDeviceContext *ctx = hwfc->device_ctx->internal->priv;
+    VAAPIDeviceContext *ctx = hwfc->device_ctx->hwctx;
     enum AVPixelFormat *pix_fmts;
     int i, k, sw_format_available;
 
@@ -791,7 +801,7 @@ static int vaapi_map_frame(AVHWFramesContext *hwfc,
                            AVFrame *dst, const AVFrame *src, int flags)
 {
     AVVAAPIDeviceContext *hwctx = hwfc->device_ctx->hwctx;
-    VAAPIFramesContext *ctx = hwfc->internal->priv;
+    VAAPIFramesContext *ctx = hwfc->hwctx;
     VASurfaceID surface_id;
     const VAAPIFormatDescriptor *desc;
     VAImageFormat *image_format;
@@ -799,6 +809,9 @@ static int vaapi_map_frame(AVHWFramesContext *hwfc,
     VAStatus vas;
     void *address = NULL;
     int err, i;
+#if VA_CHECK_VERSION(1, 21, 0)
+    uint32_t vaflags = 0;
+#endif
 
     surface_id = (VASurfaceID)(uintptr_t)src->data[3];
     av_log(hwfc, AV_LOG_DEBUG, "Map surface %#x.\n", surface_id);
@@ -882,7 +895,16 @@ static int vaapi_map_frame(AVHWFramesContext *hwfc,
         }
     }
 
+#if VA_CHECK_VERSION(1, 21, 0)
+    if (flags & AV_HWFRAME_MAP_READ)
+        vaflags |= VA_MAPBUFFER_FLAG_READ;
+    if (flags & AV_HWFRAME_MAP_WRITE)
+        vaflags |= VA_MAPBUFFER_FLAG_WRITE;
+    // On drivers not implementing vaMapBuffer2 libva calls vaMapBuffer instead.
+    vas = vaMapBuffer2(hwctx->display, map->image.buf, &address, vaflags);
+#else
     vas = vaMapBuffer(hwctx->display, map->image.buf, &address);
+#endif
     if (vas != VA_STATUS_SUCCESS) {
         av_log(hwfc, AV_LOG_ERROR, "Failed to map image from surface "
                "%#x: %d (%s).\n", surface_id, vas, vaErrorStr(vas));
@@ -1070,7 +1092,7 @@ static int vaapi_map_from_drm(AVHWFramesContext *src_fc, AVFrame *dst,
                               const AVFrame *src, int flags)
 {
 #if VA_CHECK_VERSION(1, 1, 0)
-    VAAPIFramesContext     *src_vafc = src_fc->internal->priv;
+    VAAPIFramesContext    *src_vafc = src_fc->hwctx;
     int use_prime2;
 #else
     int k;
@@ -1203,7 +1225,7 @@ static int vaapi_map_from_drm(AVHWFramesContext *src_fc, AVFrame *dst,
 
     if (!use_prime2 || vas != VA_STATUS_SUCCESS) {
         int k;
-        unsigned long buffer_handle;
+        uintptr_t buffer_handle;
         VASurfaceAttribExternalBuffers buffer_desc;
         VASurfaceAttrib buffer_attrs[2] = {
             {
@@ -1726,15 +1748,28 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
 #if CONFIG_LIBDRM
             drmVersion *info;
             const AVDictionaryEntry *kernel_driver;
+            const AVDictionaryEntry *vendor_id;
             kernel_driver = av_dict_get(opts, "kernel_driver", NULL, 0);
+            vendor_id = av_dict_get(opts, "vendor_id", NULL, 0);
 #endif
             for (n = 0; n < max_devices; n++) {
                 snprintf(path, sizeof(path),
                          "/dev/dri/renderD%d", 128 + n);
                 priv->drm_fd = open(path, O_RDWR);
                 if (priv->drm_fd < 0) {
-                    av_log(ctx, AV_LOG_VERBOSE, "Cannot open "
-                           "DRM render node for device %d.\n", n);
+                    if (errno == ENOENT) {
+                        if (n != max_devices - 1) {
+                            av_log(ctx, AV_LOG_VERBOSE,
+                                   "No render device %s, try next device for "
+                                   "DRM render node.\n", path);
+                            continue;
+                        }
+
+                        av_log(ctx, AV_LOG_VERBOSE, "No available render device "
+                               "for DRM render node.\n");
+                    } else
+                        av_log(ctx, AV_LOG_VERBOSE, "Cannot open "
+                               "DRM render node for device %d.\n", n);
                     break;
                 }
 #if CONFIG_LIBDRM
@@ -1770,6 +1805,33 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
                     close(priv->drm_fd);
                     priv->drm_fd = -1;
                     continue;
+                } else if (vendor_id) {
+                    drmDevicePtr device;
+                    char drm_vendor[8];
+                    if (drmGetDevice(priv->drm_fd, &device)) {
+                        av_log(ctx, AV_LOG_VERBOSE,
+                               "Failed to get DRM device info for device %d.\n", n);
+                        close(priv->drm_fd);
+                        priv->drm_fd = -1;
+                        continue;
+                    }
+
+                    snprintf(drm_vendor, sizeof(drm_vendor), "0x%x", device->deviceinfo.pci->vendor_id);
+                    if (strcmp(vendor_id->value, drm_vendor)) {
+                        av_log(ctx, AV_LOG_VERBOSE, "Ignoring device %d "
+                               "with non-matching vendor id (%s).\n",
+                               n, vendor_id->value);
+                        drmFreeDevice(&device);
+                        close(priv->drm_fd);
+                        priv->drm_fd = -1;
+                        continue;
+                    }
+                    av_log(ctx, AV_LOG_VERBOSE, "Trying to use "
+                           "DRM render node for device %d, "
+                           "with matching vendor id (%s).\n",
+                           n, vendor_id->value);
+                    drmFreeDevice(&device);
+                    break;
                 }
                 drmFreeVersion(info);
 #endif
@@ -1996,11 +2058,9 @@ const HWContextType ff_hwcontext_type_vaapi = {
     .type                   = AV_HWDEVICE_TYPE_VAAPI,
     .name                   = "VAAPI",
 
-    .device_hwctx_size      = sizeof(AVVAAPIDeviceContext),
-    .device_priv_size       = sizeof(VAAPIDeviceContext),
+    .device_hwctx_size      = sizeof(VAAPIDeviceContext),
     .device_hwconfig_size   = sizeof(AVVAAPIHWConfig),
-    .frames_hwctx_size      = sizeof(AVVAAPIFramesContext),
-    .frames_priv_size       = sizeof(VAAPIFramesContext),
+    .frames_hwctx_size      = sizeof(VAAPIFramesContext),
 
     .device_create          = &vaapi_device_create,
     .device_derive          = &vaapi_device_derive,

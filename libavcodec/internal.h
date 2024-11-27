@@ -26,10 +26,7 @@
 
 #include <stdint.h>
 
-#include "libavutil/buffer.h"
 #include "libavutil/channel_layout.h"
-#include "libavutil/mathematics.h"
-#include "libavutil/pixfmt.h"
 #include "avcodec.h"
 #include "config.h"
 
@@ -57,12 +54,21 @@ typedef struct AVCodecInternal {
     int is_copy;
 
     /**
+     * This field is set to 1 when frame threading is being used and the parent
+     * AVCodecContext of this AVCodecInternal is a worker-thread context (i.e.
+     * one of those actually doing the decoding), 0 otherwise.
+     */
+    int is_frame_mt;
+
+    /**
      * Audio encoders can set this flag during init to indicate that they
      * want the small last frame to be padded to a multiple of pad_samples.
      */
     int pad_samples;
 
     struct FramePool *pool;
+
+    struct FFRefStructPool *progress_frame_pool;
 
     void *thread_ctx;
 
@@ -124,7 +130,11 @@ typedef struct AVCodecInternal {
     void *hwaccel_priv_data;
 
     /**
-     * checks API usage: after codec draining, flush is required to resume operation
+     * decoding: AVERROR_EOF has been returned from ff_decode_get_packet(); must
+     *           not be used by decoders that use the decode() callback, as they
+     *           do not call ff_decode_get_packet() directly.
+     *
+     * encoding: a flush frame has been submitted to avcodec_send_frame().
      */
     int draining;
 
@@ -147,6 +157,12 @@ typedef struct AVCodecInternal {
 #if CONFIG_LCMS2
     FFIccContext icc; /* used to read and write embedded ICC profiles */
 #endif
+
+    /**
+     * Set when the user has been warned about a failed allocation from
+     * a fixed frame pool.
+     */
+    int warned_on_failed_allocation_from_fixed_pool;
 } AVCodecInternal;
 
 /**
@@ -156,25 +172,6 @@ typedef struct AVCodecInternal {
 int ff_match_2uint16(const uint16_t (*tab)[2], int size, int a, int b);
 
 unsigned int ff_toupper4(unsigned int x);
-
-/**
- * 2^(x) for integer x
- * @return correctly rounded float
- */
-static av_always_inline float ff_exp2fi(int x) {
-    /* Normal range */
-    if (-126 <= x && x <= 128)
-        return av_int2float((x+127) << 23);
-    /* Too large */
-    else if (x > 128)
-        return INFINITY;
-    /* Subnormal numbers */
-    else if (x > -150)
-        return av_int2float(1 << (x+149));
-    /* Negligibly small */
-    else
-        return 0;
-}
 
 int avpriv_h264_has_num_reorder_frames(AVCodecContext *avctx);
 

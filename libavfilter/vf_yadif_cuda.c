@@ -22,7 +22,8 @@
 #include "libavutil/hwcontext.h"
 #include "libavutil/hwcontext_cuda_internal.h"
 #include "libavutil/cuda_check.h"
-#include "internal.h"
+
+#include "filters.h"
 #include "yadif.h"
 
 #include "cuda/load_helper.h"
@@ -191,7 +192,6 @@ static av_cold void deint_cuda_uninit(AVFilterContext *ctx)
 {
     CUcontext dummy;
     DeintCUDAContext *s = ctx->priv;
-    YADIFContext *y = &s->yadif;
 
     if (s->hwctx && s->cu_module) {
         CudaFunctions *cu = s->hwctx->internal->cuda_dl;
@@ -200,10 +200,7 @@ static av_cold void deint_cuda_uninit(AVFilterContext *ctx)
         CHECK_CU(cu->cuCtxPopCurrent(&dummy));
     }
 
-    av_frame_free(&y->prev);
-    av_frame_free(&y->cur);
-    av_frame_free(&y->next);
-    ff_ccfifo_uninit(&y->cc_fifo);
+    ff_yadif_uninit(ctx);
 
     av_buffer_unref(&s->device_ref);
     s->hwctx = NULL;
@@ -213,16 +210,17 @@ static av_cold void deint_cuda_uninit(AVFilterContext *ctx)
 
 static int config_input(AVFilterLink *inlink)
 {
+    FilterLink        *l = ff_filter_link(inlink);
     AVFilterContext *ctx = inlink->dst;
     DeintCUDAContext *s  = ctx->priv;
 
-    if (!inlink->hw_frames_ctx) {
+    if (!l->hw_frames_ctx) {
         av_log(ctx, AV_LOG_ERROR, "A hardware frames reference is "
                "required to associate the processing device.\n");
         return AVERROR(EINVAL);
     }
 
-    s->input_frames_ref = av_buffer_ref(inlink->hw_frames_ctx);
+    s->input_frames_ref = av_buffer_ref(l->hw_frames_ctx);
     if (!s->input_frames_ref) {
         av_log(ctx, AV_LOG_ERROR, "A input frames reference create "
                "failed.\n");
@@ -235,6 +233,7 @@ static int config_input(AVFilterLink *inlink)
 
 static int config_output(AVFilterLink *link)
 {
+    FilterLink *l = ff_filter_link(link);
     AVHWFramesContext *output_frames;
     AVFilterContext *ctx = link->src;
     DeintCUDAContext *s = ctx->priv;
@@ -253,15 +252,15 @@ static int config_output(AVFilterLink *link)
     s->hwctx = ((AVHWDeviceContext*)s->device_ref->data)->hwctx;
     cu = s->hwctx->internal->cuda_dl;
 
-    link->hw_frames_ctx = av_hwframe_ctx_alloc(s->device_ref);
-    if (!link->hw_frames_ctx) {
+    l->hw_frames_ctx = av_hwframe_ctx_alloc(s->device_ref);
+    if (!l->hw_frames_ctx) {
         av_log(ctx, AV_LOG_ERROR, "Failed to create HW frame context "
                "for output.\n");
         ret = AVERROR(ENOMEM);
         goto exit;
     }
 
-    output_frames = (AVHWFramesContext*)link->hw_frames_ctx->data;
+    output_frames = (AVHWFramesContext*)l->hw_frames_ctx->data;
 
     output_frames->format    = AV_PIX_FMT_CUDA;
     output_frames->sw_format = s->input_frames->sw_format;
@@ -274,34 +273,16 @@ static int config_output(AVFilterLink *link)
     if (ret < 0)
         goto exit;
 
-    ret = av_hwframe_ctx_init(link->hw_frames_ctx);
+    ret = av_hwframe_ctx_init(l->hw_frames_ctx);
     if (ret < 0) {
         av_log(ctx, AV_LOG_ERROR, "Failed to initialise CUDA frame "
                "context for output: %d\n", ret);
         goto exit;
     }
 
-    link->time_base = av_mul_q(ctx->inputs[0]->time_base, (AVRational){1, 2});
-    link->w         = ctx->inputs[0]->w;
-    link->h         = ctx->inputs[0]->h;
-
-    if(y->mode & 1)
-        link->frame_rate = av_mul_q(ctx->inputs[0]->frame_rate,
-                                    (AVRational){2, 1});
-    else
-        link->frame_rate = ctx->inputs[0]->frame_rate;
-
-    ret = ff_ccfifo_init(&y->cc_fifo, link->frame_rate, ctx);
-    if (ret < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Failure to setup CC FIFO queue\n");
+    ret = ff_yadif_config_output_common(link);
+    if (ret < 0)
         goto exit;
-    }
-
-    if (link->w < 3 || link->h < 3) {
-        av_log(ctx, AV_LOG_ERROR, "Video of less than 3 columns or lines is not supported\n");
-        ret = AVERROR(EINVAL);
-        goto exit;
-    }
 
     y->csp = av_pix_fmt_desc_get(output_frames->sw_format);
     y->filter = filter;

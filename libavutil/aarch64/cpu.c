@@ -20,42 +20,24 @@
 #include "libavutil/cpu_internal.h"
 #include "config.h"
 
-#if (defined(__linux__) || defined(__ANDROID__)) && HAVE_GETAUXVAL
+#if HAVE_GETAUXVAL || HAVE_ELF_AUX_INFO
 #include <stdint.h>
 #include <sys/auxv.h>
 
-#define get_cpu_feature_reg(reg, val) \
-        __asm__("mrs %0, " #reg : "=r" (val))
+#define HWCAP_AARCH64_ASIMDDP (1 << 20)
+#define HWCAP2_AARCH64_I8MM   (1 << 13)
 
 static int detect_flags(void)
 {
     int flags = 0;
-    unsigned long hwcap;
 
-    hwcap = getauxval(AT_HWCAP);
+    unsigned long hwcap = ff_getauxval(AT_HWCAP);
+    unsigned long hwcap2 = ff_getauxval(AT_HWCAP2);
 
-#if defined(HWCAP_CPUID)
-    // We can check for DOTPROD and I8MM using HWCAP_ASIMDDP and
-    // HWCAP2_I8MM too, avoiding to read the CPUID registers (which triggers
-    // a trap, handled by the kernel). However the HWCAP_* defines for these
-    // extensions are added much later than HWCAP_CPUID, so the userland
-    // headers might lack support for them even if the binary later is run
-    // on hardware that does support it (and where the kernel might support
-    // HWCAP_CPUID).
-    // See https://www.kernel.org/doc/html/latest/arm64/cpu-feature-registers.html
-    if (hwcap & HWCAP_CPUID) {
-        uint64_t tmp;
-
-        get_cpu_feature_reg(ID_AA64ISAR0_EL1, tmp);
-        if (((tmp >> 44) & 0xf) == 0x1)
-            flags |= AV_CPU_FLAG_DOTPROD;
-        get_cpu_feature_reg(ID_AA64ISAR1_EL1, tmp);
-        if (((tmp >> 52) & 0xf) == 0x1)
-            flags |= AV_CPU_FLAG_I8MM;
-    }
-#else
-    (void)hwcap;
-#endif
+    if (hwcap & HWCAP_AARCH64_ASIMDDP)
+        flags |= AV_CPU_FLAG_DOTPROD;
+    if (hwcap2 & HWCAP2_AARCH64_I8MM)
+        flags |= AV_CPU_FLAG_I8MM;
 
     return flags;
 }
@@ -63,22 +45,61 @@ static int detect_flags(void)
 #elif defined(__APPLE__) && HAVE_SYSCTLBYNAME
 #include <sys/sysctl.h>
 
+static int have_feature(const char *feature) {
+    uint32_t value = 0;
+    size_t size = sizeof(value);
+    if (!sysctlbyname(feature, &value, &size, NULL, 0))
+        return value;
+    return 0;
+}
+
 static int detect_flags(void)
 {
-    uint32_t value = 0;
-    size_t size;
     int flags = 0;
 
-    size = sizeof(value);
-    if (!sysctlbyname("hw.optional.arm.FEAT_DotProd", &value, &size, NULL, 0)) {
-        if (value)
+    if (have_feature("hw.optional.arm.FEAT_DotProd"))
+        flags |= AV_CPU_FLAG_DOTPROD;
+    if (have_feature("hw.optional.arm.FEAT_I8MM"))
+        flags |= AV_CPU_FLAG_I8MM;
+
+    return flags;
+}
+
+#elif defined(__OpenBSD__)
+#include <machine/armreg.h>
+#include <machine/cpu.h>
+#include <sys/types.h>
+#include <sys/sysctl.h>
+
+static int detect_flags(void)
+{
+    int flags = 0;
+
+#ifdef CPU_ID_AA64ISAR0
+    int mib[2];
+    uint64_t isar0;
+    uint64_t isar1;
+    size_t len;
+
+    mib[0] = CTL_MACHDEP;
+    mib[1] = CPU_ID_AA64ISAR0;
+    len = sizeof(isar0);
+    if (sysctl(mib, 2, &isar0, &len, NULL, 0) != -1) {
+        if (ID_AA64ISAR0_DP(isar0) >= ID_AA64ISAR0_DP_IMPL)
             flags |= AV_CPU_FLAG_DOTPROD;
     }
-    size = sizeof(value);
-    if (!sysctlbyname("hw.optional.arm.FEAT_I8MM", &value, &size, NULL, 0)) {
-        if (value)
+
+    mib[0] = CTL_MACHDEP;
+    mib[1] = CPU_ID_AA64ISAR1;
+    len = sizeof(isar1);
+    if (sysctl(mib, 2, &isar1, &len, NULL, 0) != -1) {
+#ifdef ID_AA64ISAR1_I8MM_IMPL
+        if (ID_AA64ISAR1_I8MM(isar1) >= ID_AA64ISAR1_I8MM_IMPL)
             flags |= AV_CPU_FLAG_I8MM;
+#endif
     }
+#endif
+
     return flags;
 }
 

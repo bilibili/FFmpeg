@@ -22,13 +22,13 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/ffmath.h"
 #include "libavutil/eval.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/tx.h"
 #include "audio.h"
 #include "avfilter.h"
 #include "filters.h"
 #include "formats.h"
-#include "internal.h"
 #include "window_func.h"
 
 typedef struct AudioFIRSourceContext {
@@ -337,27 +337,27 @@ static const EqPreset eq_presets[] = {
 };
 
 static const AVOption afireqsrc_options[] = {
-    { "preset","set equalizer preset", OFFSET(preset), AV_OPT_TYPE_INT, {.i64=0}, -1, FF_ARRAY_ELEMS(eq_presets)-1, FLAGS, "preset" },
-    { "p",     "set equalizer preset", OFFSET(preset), AV_OPT_TYPE_INT, {.i64=0}, -1, FF_ARRAY_ELEMS(eq_presets)-1, FLAGS, "preset" },
-    { "custom",            NULL, 0, AV_OPT_TYPE_CONST, {.i64=-1}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 0].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 0}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 1].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 1}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 2].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 2}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 3].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 3}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 4].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 4}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 5].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 5}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 6].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 6}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 7].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 7}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 8].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 8}, 0, 0, FLAGS, "preset" },
-    { eq_presets[ 9].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 9}, 0, 0, FLAGS, "preset" },
-    { eq_presets[10].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=10}, 0, 0, FLAGS, "preset" },
-    { eq_presets[11].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=11}, 0, 0, FLAGS, "preset" },
-    { eq_presets[12].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=12}, 0, 0, FLAGS, "preset" },
-    { eq_presets[13].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=13}, 0, 0, FLAGS, "preset" },
-    { eq_presets[14].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=14}, 0, 0, FLAGS, "preset" },
-    { eq_presets[15].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=15}, 0, 0, FLAGS, "preset" },
-    { eq_presets[16].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=16}, 0, 0, FLAGS, "preset" },
-    { eq_presets[17].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=17}, 0, 0, FLAGS, "preset" },
+    { "preset","set equalizer preset", OFFSET(preset), AV_OPT_TYPE_INT, {.i64=0}, -1, FF_ARRAY_ELEMS(eq_presets)-1, FLAGS, .unit = "preset" },
+    { "p",     "set equalizer preset", OFFSET(preset), AV_OPT_TYPE_INT, {.i64=0}, -1, FF_ARRAY_ELEMS(eq_presets)-1, FLAGS, .unit = "preset" },
+    { "custom",            NULL, 0, AV_OPT_TYPE_CONST, {.i64=-1}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 0].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 0}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 1].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 1}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 2].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 2}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 3].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 3}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 4].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 4}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 5].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 5}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 6].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 6}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 7].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 7}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 8].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 8}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[ 9].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64= 9}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[10].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=10}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[11].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=11}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[12].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=12}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[13].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=13}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[14].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=14}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[15].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=15}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[16].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=16}, 0, 0, FLAGS, .unit = "preset" },
+    { eq_presets[17].name, NULL, 0, AV_OPT_TYPE_CONST, {.i64=17}, 0, 0, FLAGS, .unit = "preset" },
     { "gains", "set gain values per band", OFFSET(magnitude_str), AV_OPT_TYPE_STRING, {.str="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"}, 0, 0, FLAGS },
     { "g",     "set gain values per band", OFFSET(magnitude_str), AV_OPT_TYPE_STRING, {.str="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"}, 0, 0, FLAGS },
     { "bands", "set central frequency values per band", OFFSET(freq_points_str), AV_OPT_TYPE_STRING, {.str=DEFAULT_BANDS}, 0, 0, FLAGS },
@@ -368,14 +368,14 @@ static const AVOption afireqsrc_options[] = {
     { "r",           "set sample rate", OFFSET(sample_rate), AV_OPT_TYPE_INT, {.i64=44100},  1, INT_MAX,    FLAGS },
     { "nb_samples", "set the number of samples per requested frame", OFFSET(nb_samples), AV_OPT_TYPE_INT, {.i64 = 1024}, 1, INT_MAX, FLAGS },
     { "n",          "set the number of samples per requested frame", OFFSET(nb_samples), AV_OPT_TYPE_INT, {.i64 = 1024}, 1, INT_MAX, FLAGS },
-    { "interp","set the interpolation", OFFSET(interp), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS, "interp" },
-    { "i",     "set the interpolation", OFFSET(interp), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS, "interp" },
-    { "linear", NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, "interp" },
-    { "cubic",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, "interp" },
-    { "phase","set the phase", OFFSET(phaset), AV_OPT_TYPE_INT, {.i64=1}, 0, 1, FLAGS, "phase" },
-    { "h",    "set the phase", OFFSET(phaset), AV_OPT_TYPE_INT, {.i64=1}, 0, 1, FLAGS, "phase" },
-    { "linear", "linear phase",  0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, "phase" },
-    { "min",    "minimum phase", 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, "phase" },
+    { "interp","set the interpolation", OFFSET(interp), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS, .unit = "interp" },
+    { "i",     "set the interpolation", OFFSET(interp), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS, .unit = "interp" },
+    { "linear", NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, .unit = "interp" },
+    { "cubic",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, .unit = "interp" },
+    { "phase","set the phase", OFFSET(phaset), AV_OPT_TYPE_INT, {.i64=1}, 0, 1, FLAGS, .unit = "phase" },
+    { "h",    "set the phase", OFFSET(phaset), AV_OPT_TYPE_INT, {.i64=1}, 0, 1, FLAGS, .unit = "phase" },
+    { "linear", "linear phase",  0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, .unit = "phase" },
+    { "min",    "minimum phase", 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, .unit = "phase" },
     {NULL}
 };
 
@@ -480,7 +480,7 @@ static av_cold int config_eq_output(AVFilterLink *outlink)
         if (ret < 0)
             return ret;
 
-        s->magnitude = av_calloc(s->nb_magnitude, sizeof(*s->magnitude));
+        s->magnitude = av_calloc(s->nb_magnitude + 1, sizeof(*s->magnitude));
         if (!s->magnitude)
             return AVERROR(ENOMEM);
         memcpy(s->magnitude, eq_presets[s->preset].gains, sizeof(*s->magnitude) * s->nb_magnitude);

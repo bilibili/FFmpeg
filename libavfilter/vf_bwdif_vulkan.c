@@ -25,7 +25,7 @@
 #include "vulkan_filter.h"
 #include "vulkan_spirv.h"
 #include "yadif.h"
-#include "internal.h"
+#include "filters.h"
 
 typedef struct BWDIFVulkanContext {
     YADIFContext yadif;
@@ -296,23 +296,26 @@ static void bwdif_vulkan_uninit(AVFilterContext *avctx)
 
     ff_vk_uninit(&s->vkctx);
 
+    ff_yadif_uninit(avctx);
+
     s->initialized = 0;
 }
 
 static int bwdif_vulkan_config_input(AVFilterLink *inlink)
 {
+    FilterLink *l = ff_filter_link(inlink);
     AVHWFramesContext *input_frames;
     AVFilterContext *avctx = inlink->dst;
     BWDIFVulkanContext *s = avctx->priv;
     FFVulkanContext *vkctx = &s->vkctx;
 
-    if (!inlink->hw_frames_ctx) {
+    if (!l->hw_frames_ctx) {
         av_log(inlink->dst, AV_LOG_ERROR, "Vulkan filtering requires a "
                "hardware frames context on the input.\n");
         return AVERROR(EINVAL);
     }
 
-    input_frames = (AVHWFramesContext *)inlink->hw_frames_ctx->data;
+    input_frames = (AVHWFramesContext *)l->hw_frames_ctx->data;
     if (input_frames->format != AV_PIX_FMT_VULKAN)
         return AVERROR(EINVAL);
 
@@ -321,7 +324,7 @@ static int bwdif_vulkan_config_input(AVFilterLink *inlink)
         return 0;
 
     /* Save the ref, without reffing it */
-    vkctx->input_frames_ref = inlink->hw_frames_ctx;
+    vkctx->input_frames_ref = l->hw_frames_ctx;
 
     /* Defaults */
     vkctx->output_format = input_frames->sw_format;
@@ -333,13 +336,14 @@ static int bwdif_vulkan_config_input(AVFilterLink *inlink)
 
 static int bwdif_vulkan_config_output(AVFilterLink *outlink)
 {
+    FilterLink *l = ff_filter_link(outlink);
     int err;
     AVFilterContext *avctx = outlink->src;
     BWDIFVulkanContext *s = avctx->priv;
     YADIFContext *y = &s->yadif;
     FFVulkanContext *vkctx = &s->vkctx;
 
-    av_buffer_unref(&outlink->hw_frames_ctx);
+    av_buffer_unref(&l->hw_frames_ctx);
 
     err = ff_vk_filter_init_context(avctx, vkctx, vkctx->input_frames_ref,
                                     vkctx->output_width, vkctx->output_height,
@@ -350,26 +354,21 @@ static int bwdif_vulkan_config_output(AVFilterLink *outlink)
     /* For logging */
     vkctx->class = y->class;
 
-    outlink->hw_frames_ctx = av_buffer_ref(vkctx->frames_ref);
-    if (!outlink->hw_frames_ctx)
+    l->hw_frames_ctx = av_buffer_ref(vkctx->frames_ref);
+    if (!l->hw_frames_ctx)
         return AVERROR(ENOMEM);
 
-    outlink->time_base = av_mul_q(avctx->inputs[0]->time_base, (AVRational){1, 2});
-    outlink->w         = vkctx->output_width;
-    outlink->h         = vkctx->output_height;
-
-    if (y->mode & 1)
-        outlink->frame_rate = av_mul_q(avctx->inputs[0]->frame_rate,
-                                       (AVRational){2, 1});
-
-    if (outlink->w < 4 || outlink->h < 4) {
-        av_log(avctx, AV_LOG_ERROR, "Video of less than 4 columns or lines is not "
-               "supported\n");
-        return AVERROR(EINVAL);
-    }
+    err = ff_yadif_config_output_common(outlink);
+    if (err < 0)
+        return err;
 
     y->csp = av_pix_fmt_desc_get(vkctx->frames->sw_format);
     y->filter = bwdif_vulkan_filter_frame;
+
+    if (AV_CEIL_RSHIFT(outlink->w, y->csp->log2_chroma_w) < 4 || AV_CEIL_RSHIFT(outlink->h, y->csp->log2_chroma_h) < 4) {
+        av_log(avctx, AV_LOG_ERROR, "Video with planes less than 4 columns or lines is not supported\n");
+        return AVERROR(EINVAL);
+    }
 
     return init_filter(avctx);
 }

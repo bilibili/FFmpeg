@@ -56,14 +56,8 @@ and should try to fix issues their commit causes.
 
 @section Language
 
-FFmpeg is mainly programmed in the ISO C99 language, extended with:
-@itemize @bullet
-@item
-Atomic operations from C11 @file{stdatomic.h}. They are emulated on
-architectures/compilers that do not support them, so all FFmpeg-internal code
-may use atomics without any extra checks. However, @file{stdatomic.h} must not
-be included in public headers, so they stay C99-compatible.
-@end itemize
+FFmpeg is mainly programmed in the ISO C11 language, except for the public
+headers which must stay C99 compatible.
 
 Compiler-specific extensions may be used with good reason, but must not be
 depended on, i.e. the code must still compile and work with compilers lacking
@@ -99,7 +93,7 @@ The specific syntax used for writing assembly is:
 NASM on x86;
 
 @item
-GAS on ARM.
+GAS on ARM and RISC-V.
 @end itemize
 
 A unit testing framework for assembly called @code{checkasm} lives under
@@ -396,6 +390,10 @@ If you apply a patch, send an
 answer to ffmpeg-devel (or wherever you got the patch from) saying that
 you applied the patch.
 
+@subheading Credit any researchers
+If a commit/patch fixes an issues found by some researcher, always credit the
+researcher in the commit message for finding/reporting the issue.
+
 @subheading Always wait long enough before pushing changes
 Do NOT commit to code actively maintained by others without permission.
 Send a patch to ffmpeg-devel. If no one answers within a reasonable
@@ -640,6 +638,11 @@ patch is inline or attached per mail.
 You can check @url{https://patchwork.ffmpeg.org}, if your patch does not show up, its mime type
 likely was wrong.
 
+@subheading How to setup git send-email?
+
+Please see @url{https://git-send-email.io/}.
+For gmail additionally see @url{https://shallowsky.com/blog/tech/email/gmail-app-passwds.html}.
+
 @subheading Sending patches from email clients
 Using @code{git send-email} might not be desirable for everyone. The
 following trick allows to send patches via email clients in a safe
@@ -684,7 +687,7 @@ number) in @file{libavcodec/version.h} or @file{libavformat/version.h}?
 Did you register it in @file{allcodecs.c} or @file{allformats.c}?
 
 @item
-Did you add the AVCodecID to @file{avcodec.h}?
+Did you add the AVCodecID to @file{codec_id.h}?
 When adding new codec IDs, also add an entry to the codec descriptor
 list in @file{libavcodec/codec_desc.c}.
 
@@ -699,7 +702,7 @@ already being compiled by some other rule, like a raw demuxer.
 
 @item
 Did you add an entry to the table of supported formats or codecs in
-@file{doc/general.texi}?
+@file{doc/general_contents.texi}?
 
 @item
 Did you add an entry in the Changelog?

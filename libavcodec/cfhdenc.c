@@ -23,11 +23,11 @@
  * Cineform HD video encoder
  */
 
-#include <stdlib.h>
-#include <string.h>
+#include <stddef.h>
 
-#include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
+#include "libavutil/pixdesc.h"
 
 #include "avcodec.h"
 #include "bytestream.h"
@@ -36,7 +36,6 @@
 #include "codec_internal.h"
 #include "encode.h"
 #include "put_bits.h"
-#include "thread.h"
 
 /* Derived from existing tables from decoder */
 static const unsigned codebook[256][2] = {
@@ -258,8 +257,8 @@ static av_cold int cfhd_encode_init(AVCodecContext *avctx)
     if (ret < 0)
         return ret;
 
-    if (avctx->height < 4) {
-        av_log(avctx, AV_LOG_ERROR, "Height must be >= 4.\n");
+    if (avctx->height < 32) {
+        av_log(avctx, AV_LOG_ERROR, "Height must be >= 32.\n");
         return AVERROR_INVALIDDATA;
     }
 
@@ -553,7 +552,7 @@ static int cfhd_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                          width, height * 2);
     }
 
-    ret = ff_alloc_packet(avctx, pkt, 256LL + s->planes * (2LL * avctx->width * (avctx->height + 15) + 2048LL));
+    ret = ff_alloc_packet(avctx, pkt, 256LL + s->planes * (4LL * avctx->width * (avctx->height + 15) + 2048LL));
     if (ret < 0)
         return ret;
 
@@ -761,7 +760,6 @@ static int cfhd_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                         } else if (count > 0) {
                             count = put_runcode(pb, count, rb);
                         }
-
                         put_bits(pb, cb[index].size, cb[index].bits);
                     }
 
@@ -830,20 +828,20 @@ static av_cold int cfhd_encode_close(AVCodecContext *avctx)
 #define OFFSET(x) offsetof(CFHDEncContext, x)
 #define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM
 static const AVOption options[] = {
-    { "quality", "set quality", OFFSET(quality), AV_OPT_TYPE_INT,   {.i64= 0}, 0, 12, VE, "q" },
-    { "film3+",   NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 0}, 0,  0, VE, "q" },
-    { "film3",    NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 1}, 0,  0, VE, "q" },
-    { "film2+",   NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 2}, 0,  0, VE, "q" },
-    { "film2",    NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 3}, 0,  0, VE, "q" },
-    { "film1.5",  NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 4}, 0,  0, VE, "q" },
-    { "film1+",   NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 5}, 0,  0, VE, "q" },
-    { "film1",    NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 6}, 0,  0, VE, "q" },
-    { "high+",    NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 7}, 0,  0, VE, "q" },
-    { "high",     NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 8}, 0,  0, VE, "q" },
-    { "medium+",  NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 9}, 0,  0, VE, "q" },
-    { "medium",   NULL,         0,               AV_OPT_TYPE_CONST, {.i64=10}, 0,  0, VE, "q" },
-    { "low+",     NULL,         0,               AV_OPT_TYPE_CONST, {.i64=11}, 0,  0, VE, "q" },
-    { "low",      NULL,         0,               AV_OPT_TYPE_CONST, {.i64=12}, 0,  0, VE, "q" },
+    { "quality", "set quality", OFFSET(quality), AV_OPT_TYPE_INT,   {.i64= 0}, 0, 12, VE, .unit = "q" },
+    { "film3+",   NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 0}, 0,  0, VE, .unit = "q" },
+    { "film3",    NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 1}, 0,  0, VE, .unit = "q" },
+    { "film2+",   NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 2}, 0,  0, VE, .unit = "q" },
+    { "film2",    NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 3}, 0,  0, VE, .unit = "q" },
+    { "film1.5",  NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 4}, 0,  0, VE, .unit = "q" },
+    { "film1+",   NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 5}, 0,  0, VE, .unit = "q" },
+    { "film1",    NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 6}, 0,  0, VE, .unit = "q" },
+    { "high+",    NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 7}, 0,  0, VE, .unit = "q" },
+    { "high",     NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 8}, 0,  0, VE, .unit = "q" },
+    { "medium+",  NULL,         0,               AV_OPT_TYPE_CONST, {.i64= 9}, 0,  0, VE, .unit = "q" },
+    { "medium",   NULL,         0,               AV_OPT_TYPE_CONST, {.i64=10}, 0,  0, VE, .unit = "q" },
+    { "low+",     NULL,         0,               AV_OPT_TYPE_CONST, {.i64=11}, 0,  0, VE, .unit = "q" },
+    { "low",      NULL,         0,               AV_OPT_TYPE_CONST, {.i64=12}, 0,  0, VE, .unit = "q" },
     { NULL},
 };
 
@@ -872,5 +870,6 @@ const FFCodec ff_cfhd_encoder = {
                           AV_PIX_FMT_GBRAP12,
                           AV_PIX_FMT_NONE
                         },
+    .color_ranges     = AVCOL_RANGE_MPEG,
     .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
 };

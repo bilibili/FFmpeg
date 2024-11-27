@@ -42,7 +42,7 @@ static void check_add_int16(HuffYUVDSPContext *c, unsigned mask, int width, cons
     uint16_t *dst0 = av_mallocz(width * sizeof(uint16_t));
     uint16_t *dst1 = av_mallocz(width * sizeof(uint16_t));
 
-    declare_func(void, uint16_t *dst, uint16_t *src, unsigned mask, int w);
+    declare_func(void, uint16_t *dst, const uint16_t *src, unsigned mask, int w);
 
     if (!src0 || !src1 || !dst0 || !dst1)
         fail();
@@ -64,6 +64,34 @@ static void check_add_int16(HuffYUVDSPContext *c, unsigned mask, int width, cons
     av_free(dst1);
 }
 
+static void check_add_hfyu_left_pred_bgr32(HuffYUVDSPContext *c)
+{
+#define BUF_SIZE 1080
+    uint8_t src[4 * BUF_SIZE], dst0[4 * BUF_SIZE], dst1[4 * BUF_SIZE];
+    uint8_t left[4], left0[4], left1[4];
+
+    declare_func(void, uint8_t *d, const uint8_t *s, intptr_t w, uint8_t *l);
+
+    randomize_buffers(src, sizeof (src));
+    randomize_buffers(left, sizeof (left));
+    memcpy(left0, left, sizeof (left));
+    memcpy(left1, left, sizeof (left));
+
+    if (check_func(c->add_hfyu_left_pred_bgr32, "add_hfyu_left_pred_bgr32")) {
+        call_ref(dst0, src, BUF_SIZE, left0);
+        call_new(dst1, src, BUF_SIZE, left1);
+
+        if (memcmp(dst0, dst1, sizeof (dst0)) != 0 ||
+            memcmp(left0, left1, sizeof (left0)) != 0) {
+            fail();
+        }
+
+        bench_new(dst1, src, BUF_SIZE, left);
+    }
+
+    report("add_hfyu_left_pred_bgr32");
+}
+
 void checkasm_check_huffyuvdsp(void)
 {
     HuffYUVDSPContext c;
@@ -78,4 +106,6 @@ void checkasm_check_huffyuvdsp(void)
     /*! test always with the same size (for perf test) */
     check_add_int16(&c, 65535, 16*128, "add_int16_128");
     report("add_int16_128");
+
+    check_add_hfyu_left_pred_bgr32(&c);
 }
