@@ -23,6 +23,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "demux.h"
 #include "url.h"
 #include "avformat.h"
 
@@ -69,11 +70,11 @@ IJK_DUMMY_PROTOCOL(ijktcphook);
 IJK_DUMMY_PROTOCOL(ijkio);
 
 #define IJK_FF_DEMUXER(x)                                                                          \
-extern AVInputFormat ff_##x##_demuxer;                                                               \
-int ijkav_register_##x##_demuxer(AVInputFormat *demuxer, int demuxer_size);                        \
-int ijkav_register_##x##_demuxer(AVInputFormat *demuxer, int demuxer_size)                         \
+extern FFInputFormat ff_##x##_demuxer;                                                               \
+int ijkav_register_##x##_demuxer(FFInputFormat *demuxer, int demuxer_size);                        \
+int ijkav_register_##x##_demuxer(FFInputFormat *demuxer, int demuxer_size)                         \
 {                                                                                                   \
-    if (demuxer_size != sizeof(AVInputFormat)) {                                                     \
+    if (demuxer_size != sizeof(FFInputFormat)) {                                                     \
         av_log(NULL, AV_LOG_ERROR, "ijkav_register_##x##_demuxer: ABI mismatch.\n");               \
         return -1;                                                                                  \
     }                                                                                               \
@@ -89,10 +90,10 @@ static const AVClass ijk_##x##_demuxer_class = {                    \
     .version    = LIBAVUTIL_VERSION_INT,                            \
     };                                                              \
                                                                     \
-AVInputFormat ff_##x##_demuxer = {                                  \
-    .name                = #x,                                      \
+FFInputFormat ff_##x##_demuxer = {                                  \
+    .p.name                = #x,                                    \
     .priv_data_size      = 1,                                       \
-    .priv_class          = &ijk_##x##_demuxer_class,                \
+    .p.priv_class          = &ijk_##x##_demuxer_class,              \
 };
 
 IJK_DUMMY_DEMUXER(ijklivehook);

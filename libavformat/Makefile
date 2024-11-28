@@ -11,6 +11,7 @@ HEADERS = avformat.h                                                    \
           flv.h                                                         \
           internal.h                                                    \
           metadata.h                                                    \
+          demux.h                                                    	\
 
 OBJS = allformats.o         \
        avformat.o           \
